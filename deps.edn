@@ -1,4 +1,5 @@
-{:paths ["src/cljc" "src/clj"]
+{:paths ["src/clj" "src/cljc"]
+ :deps {org.clojure/data.json {:mvn/version "2.4.0"}}
  :aliases
  {:cljs-prod
   {:extra-deps {funcool/promesa {:mvn/version "10.0.594"}}
@@ -9,9 +10,9 @@
 
   :clj-dev
   {:extra-deps {badigeon/badigeon {:mvn/version "1.7"}
-                ;; cider/cider-nrepl {:mvn/version "0.50.2"}
-                org.clojars.cartesiantheatrics/manifold3d$linux-x86_64 {:mvn/version "2.0.3"}
-                #_{:local/root "../manifold/bindings/java/target/manifold3d-1.0.39.jar"}
+                cider/cider-nrepl {:mvn/version "0.50.2"}
+                org.clojars.cartesiantheatrics/manifold3d$linux-x86_64
+                {:local/root "../manifold/bindings/java/target/manifold3d-1.0.39.jar"}
                 com.billpiel/sayid {:mvn/version "0.0.18"}
                 org.clojure/clojure {:mvn/version "1.12.0"}
                 ;; jme-clj/jme-clj {:mvn/version "0.1.13"}
@@ -19,8 +20,18 @@
                 }
    :extra-paths ["build" "test/cljc" "examples/" "resources" "asset"]}
 
-  :clj-test {:extra-paths ["test/cljc"]
-             :extra-deps  {lambdaisland/kaocha {:mvn/version "1.88.1376"}
+  :clj-repl
+  {:main-opts ["-r"]}
+
+  :nrepl
+  {:main-opts ["-m" "nrepl.cmdline"
+               "--middleware" "[cider.nrepl/cider-middleware]"
+               "--port" "7888"]}
+
+  :clj-test {:extra-paths ["test/cljc" "test/clj"]
+             :extra-deps  {org.clojars.cartesiantheatrics/manifold3d$linux-x86_64
+                           {:local/root "../manifold/bindings/java/target/manifold3d-1.0.39.jar"}
+                           lambdaisland/kaocha {:mvn/version "1.88.1376"}
                            org.clojure/clojure {:mvn/version "1.11.2"}}
              :main-opts   ["-m" "kaocha.runner"]}
 

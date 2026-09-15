@@ -37,6 +37,47 @@ cmake --install . --config Release
 
 The ClojureScript lib is not yet well supported or available via. Maven. You'll have to clone the repo and move `public/manifold.wasm` into `public/js/`. Run `npm install` to install the gltf (for rendering meshes) then connect via. shadow. There's a half-baked function called `createGLTF` in `manifold_viewer.js` that will take a manifold and throw it onto the `model-viewer` element defined in the index.html.
 
+# Development
+
+This project uses the Clojure CLI. The `:clj-dev` alias supplies the JVM
+native Manifold binding, source paths, and CIDER's nREPL middleware.
+
+The development and test aliases use the native JAR at
+`../manifold/bindings/java/target/manifold3d-1.0.39.jar`. The new UV methods
+require the matching bindings; older published JARs do not expose them.
+For a fresh Linux x86-64 checkout, clone the tested native branch alongside
+this repository (it includes the rebuilt JAR):
+
+```sh
+git clone --branch surface-uv-mapping https://github.com/SovereignShop/manifold.git ../manifold
+```
+
+If `../manifold` already exists, use a matching checkout without overwriting
+local changes. The native runtime still requires the system libraries described
+under Install above.
+
+For a local JVM REPL:
+
+```sh
+clojure -M:clj-dev:clj-repl
+```
+
+For CIDER or another nREPL client, start the server on port `7888`:
+
+```sh
+clojure -M:clj-dev:nrepl
+```
+
+Then connect the editor to `localhost:7888`. The project-specific native
+binding is intentionally kept in the development aliases so published
+artifacts remain platform-independent.
+
+Run the test suite with:
+
+```sh
+clojure -M:clj-test
+```
+
 # Examples
 
 Examples should look familiar if you've ever used OpenSCAD.
@@ -344,6 +385,118 @@ In addition to specifying a uniform color when exporting a manifold, color attri
 
 ![Color](resources/images/colored-manifold.png)
 
+## Texture coordinates
+
+On the JVM, UV coordinates can be attached as MeshGL vertex properties. Manifold
+interpolates those properties across newly created boolean faces, so apply the
+same property slot to every operand before combining them:
+
+```clojure
+(require '[clj-manifold3d.texture :as texture])
+
+(def uv-map
+  (fn [[x y z]] [(* 0.05 x) (* 0.05 z)]))
+
+(def textured
+  (m/difference
+   (texture/uv (m/cube 20 20 20 true) uv-map :prop-index 3)
+   (texture/uv (m/translate (m/cube 12 12 30 true) [0 0 5])
+               uv-map
+               :prop-index 3)))
+
+(texture/export-glb textured
+                    "boolean-textured.glb"
+                    "resources/images/colored-manifold.png")
+```
+
+`export-glb` embeds the PNG or JPEG and writes `TEXCOORD_0` plus a
+base-color texture into the GLB. The generated `boolean-textured.glb` is a
+small self-contained example that can be opened directly in F3D.
+
+`texture/uv` also accepts one `[u v]` pair per MeshGL vertex when explicit UV
+seams are needed. `:prop-index` is an absolute property offset, including the
+three position channels. It defaults to `:append`; when used after
+`m/color`, this appends UV0 after the default four color channels.
+
+For the common planar case, the projection can run natively without a
+per-vertex Clojure callback:
+
+```clojure
+(def textured
+  (texture/planar-uv-native (m/cube 20 20 20 true)
+                            :axes [:x :z]
+                            :scale 0.05
+                            :prop-index 3))
+```
+
+For curved or otherwise non-planar surfaces, `unwrap-native` builds charts from
+halfedge adjacency and solves each chart with a native least-squares conformal
+map. Sharp edges become seams automatically; closed components also receive
+topology-aware cuts. MeshGL vertices are split at seams while retaining merge
+metadata, so the resulting UV properties remain compatible with booleans:
+
+```clojure
+(def unwrapped
+  (texture/unwrap-native (m/sphere 10 32)
+                         :seam-angle 45.0
+                         :padding 0.01
+                         :pack? true
+                         :prop-index 3))
+
+(texture/export-glb unwrapped
+                    "sphere-unwrapped.glb"
+                    "resources/images/colored-manifold.png")
+```
+
+With `:pack? true` (the default), chart UVs are packed into `[0, 1]`. Set it
+to false to retain the solved coordinates and use `:scale` for world-space
+texture repetition.
+
+For a local sticker, `geodesic-uv` walks plane/surface intersections in native
+C++, crossing neighboring faces through paired halfedges. `:size` specifies
+the distance walked along the center baseline and each column. `:pixel-size`
+sets the physical distance between samples; it defaults to min(width,height)/32.
+Samples can land inside faces or on edges. The affected faces are subdivided
+locally, and UVs remain vertex properties compatible with booleans.
+
+The image can occupy an atlas rectangle with `:uv-rect`. A geometric boundary
+with separate inside/outside UVs prevents interpolation into `:outside-uv`:
+
+```clojure
+(def sticker-uv
+  (texture/geodesic-uv (m/sphere 10 96)
+                       :origin [0 10 0]
+                       :normal [0 1 0]
+                       :u-direction [1 0 0]
+                       :size [6 4]
+                       :pixel-size 0.1
+                       :uv-rect [0.25 0.333 0.75 0.667]
+                       :outside-uv [0.05 0.05]
+                       :prop-index 3))
+
+(texture/export-glb sticker-uv
+                    "sphere-sticker.glb"
+                    "resources/images/american-flag-atlas.png")
+```
+
+The original triangle surface and its volume are preserved. Positive local V
+points toward the top of the image. Width is measured along the center baseline;
+spacing between columns can vary away from it on curved surfaces. Despite the
+function name, these are plane-cut paths, not shortest geodesics or a stretch-free
+flattening. The patch must be a single sheet over its chosen tangent plane.
+Folds, tangencies, incomplete coverage and grids exceeding two million samples
+throw an error. Refine meshes with smooth halfedge tangents before mapping.
+`geodesic-uv-native` calls the same implementation; there is no JVM distance solver.
+
+REPL examples for the sphere, cylinder, and a boolean cut through the sticker
+are in `examples/surface_sticker.clj`:
+
+```clojure
+(require '[surface-sticker :as sticker])
+(def models (sticker/models))
+(sticker/export! models)
+```
+
 ## Compose
 
 `compose` combines manifolds or cross sections together without performing any CSG operations on them. 
@@ -417,7 +570,7 @@ Get the vertices of a Manifold using `get-vertices`:
 
 ## Get Halfedges
 
-You can get the Halfedges of a Manifold using `get-halfgedges`:
+You can get the Halfedges of a Manifold using `get-halfedges`:
 
 ```clojure
 (-> (let [m (m/cube 40 40 40 true)
@@ -444,6 +597,50 @@ You can get the Halfedges of a Manifold using `get-halfgedges`:
 ![Get Halfedges](resources/images/get-halfedges.png)
 
 The halfedge array is a useful data-structure that can be used to "walk" over adjacent faces of manifolds.
+
+For unique undirected edges, use `get-edges`. It returns sorted `Edge` records
+with `:start-vert` and `:end-vert` indexes:
+
+```clojure
+(m/get-edges (m/cube 40 40 40 true))
+;; => [#clj_manifold3d.core.Edge{:start-vert 0, :end-vert 1} ...]
+```
+
+## Rigid animation tracks
+
+The JVM `clj-manifold3d.animation` namespace provides keyframes for rigid
+parts. Geometry stays in local coordinates; only the translation, quaternion
+rotation, and scale are sampled:
+
+```clojure
+(require '[clj-manifold3d.animation :as animation])
+(def track
+  (animation/keyframes
+   [{:time 0 :translation [0 0 0] :rotation [0 0 0 1] :scale [1 1 1]}
+    {:time 1 :translation [100 0 0] :rotation [0 0 1 0] :scale [1 1 1]}]))
+(animation/sample track 0.5)
+;; => {:time 0.5, :translation [50.0 0.0 0.0], ...}
+```
+
+This layer feeds collision checks, previews, and the JVM GLB scene writer; it
+does not recompute CSG for every frame. A small pivot-arm scene demonstrates
+the complete path from Manifold solids to an animated GLB:
+
+```clojure
+(require '[clj-manifold3d.animation :as animation])
+(def pivot-scene (animation/pivot-arm-scene))
+(animation/export-scene pivot-scene "pivot-arm.glb")
+```
+
+`scene` accepts a set of stable-ID nodes. Nodes without geometry can act as
+transform parents or pivots, while animation channels target those node IDs.
+The resulting file contains separate base, pivot, and arm nodes. Open it with
+an animation-capable glTF viewer, or render a particular time with F3D:
+
+```sh
+f3d --animation-time 0 pivot-arm.glb
+f3d --animation-time 1 pivot-arm.glb
+```
 
 # Example Projects
 

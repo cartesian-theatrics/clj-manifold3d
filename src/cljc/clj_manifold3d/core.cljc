@@ -632,17 +632,21 @@ to the interpolated surface according to their barycentric coordinates."
      ([manifold normal]
       (split-by-plane manifold normal 0.0))
      ([manifold normal origin-offset]
-      (let [[x y z] normal
-            pair (.splitByPlane ^Manifold manifold (DoubleVec3. x y z) origin-offset)]
-        [(.first pair) (.second pair)]))))
+      (let [[x y z] normal]
+        ;; Pair members are borrowed native references. Copy them before the
+        ;; owning pair is closed or collected; callers retain the returned solids.
+        (with-open [pair (.splitByPlane ^Manifold manifold (DoubleVec3. x y z) origin-offset)]
+          [(Manifold. ^Manifold (.first pair))
+           (Manifold. ^Manifold (.second pair))])))))
 
 #?(:clj
    (defn split
      "Cuts `manifold` with the `cutter-manifold`. Returns vector of intersection and difference.
   More efficient than doing each operation separately. CLJ only."
      ([manifold cutter-manifold]
-      (let [ret (.split ^Manifold manifold cutter-manifold)]
-        [(.first ret) (.second ret)]))))
+      (with-open [ret (.split ^Manifold manifold cutter-manifold)]
+        [(Manifold. ^Manifold (.first ret))
+         (Manifold. ^Manifold (.second ret))]))))
 
 #?(:clj
    (defn frame
@@ -1134,6 +1138,8 @@ to the interpolated surface according to their barycentric coordinates."
   IHalfEdge
   (is-forward [this] (< start-vert end-vert)))
 
+(defrecord Edge [start-vert end-vert])
+
 #?(:clj
    (defn get-halfedges
      "Get halfedges of `man`."
@@ -1147,6 +1153,24 @@ to the interpolated surface according to their barycentric coordinates."
                   (conj! ret (Halfedge. (aget halfedges idx)
                                         (aget halfedges (+ idx 1))
                                         (aget halfedges (+ idx 2))))))))))
+
+#?(:clj
+   (defn get-edges
+     "Get unique, undirected edges of `man` as `Edge` records.
+
+     The native halfedge buffer contains one directed record for each side of
+     an edge. Canonicalizing each vertex pair makes this useful for topology
+     inspection without exposing native vectors or relying on halfedge order."
+     [man]
+     (->> (get-halfedges man)
+          (map (fn [{:keys [start-vert end-vert]}]
+                 (let [[a b] (if (< start-vert end-vert)
+                               [start-vert end-vert]
+                               [end-vert start-vert])]
+                   (Edge. a b))))
+          distinct
+          (sort-by (juxt :start-vert :end-vert))
+          vec)))
 
 #?(:clj
    (defn get-vertices

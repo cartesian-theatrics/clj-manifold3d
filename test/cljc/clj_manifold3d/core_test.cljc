@@ -5,7 +5,22 @@
    [clj-manifold3d.core :refer [mesh cube get-mesh manifold get-properties mirror union scale
                                 compose decompose translate get-mesh-gl get-mesh import-mesh loft
                                 difference smooth sphere refine cylinder polyhedron export-mesh
-                                tetrahedron circle frame rotate square]]))
+                                tetrahedron circle frame rotate square get-vertices
+                                get-halfedges get-edges]]))
+
+(deftest test-get-edges
+  (let [c (cube 10 10 10 true)
+        edges (get-edges c)]
+    (is (= 18 (count edges)))
+    (is (= 36 (count (get-halfedges c))))
+    (is (= (mapv (juxt :start-vert :end-vert) edges)
+           (->> edges
+                (map (juxt :start-vert :end-vert))
+                sort
+                vec)))
+    (is (every? (fn [{:keys [start-vert end-vert]}]
+                  (< start-vert end-vert))
+                edges))))
 
 (defn- glm-to-vectors [v]
   (for [i (range (.size v))]
