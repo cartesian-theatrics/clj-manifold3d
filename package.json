@@ -4,15 +4,50 @@
   "description": "clojurescript bindings to Manifold3D",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "build:editor": "esbuild src/js/clj_manifold3d/try_it_editor.js --bundle --minify --format=esm --target=es2020 --outfile=public/try-it/js/editor.js",
+    "build:try-it": "npm run build:editor && shadow-cljs release try-it try-it-worker",
+    "build:journal": "esbuild src/js/clj_manifold3d/journal_editor.js --bundle --minify --format=esm --target=es2020 --outfile=public/journal/js/editor.js && esbuild src/js/clj_manifold3d/journal_viewer.js --bundle --minify --format=esm --target=es2020 --outfile=public/journal/js/viewer.js && shadow-cljs release journal journal-worker",
+    "serve:try-it": "node scripts/serve-try-it.cjs",
+    "serve:journal": "clojure -M:journal-server",
+    "test:journal": "node scripts/test-journal.cjs",
+    "test:journal:state": "shadow-cljs release journal-test && node target/journal-tests.js",
+    "try-it": "npm run build:try-it && npm run serve:try-it",
+    "test:try-it": "node scripts/test-try-it.cjs",
+    "fixtures:jvm": "clojure -M:clj-dev scripts/jvm-parity-fixtures.clj",
+    "test:shared:jvm": "clojure -M:clj-dev:test-shared",
+    "test": "npm run test:shared:jvm && npm run fixtures:jvm && npm run test:cljs && npm run test:advanced && npm run test:browser",
+    "test:cljs": "shadow-cljs compile test && node target/cljs-tests.js",
+    "test:advanced": "shadow-cljs release test && node target/cljs-tests.js",
+    "test:browser": "shadow-cljs release browser-test && node scripts/browser-test.cjs"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@codemirror/autocomplete": "6.20.3",
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/state": "6.7.5",
+    "@codemirror/view": "6.43.12",
     "@gltf-transform/core": "^3.0.0",
+    "@lezer/highlight": "1.2.3",
+    "@nextjournal/lang-clojure": "1.0.0",
+    "@replit/codemirror-vim": "6.4.0",
+    "fast-png": "6.4.0",
+    "prosemirror-commands": "1.7.2",
+    "prosemirror-history": "1.5.0",
+    "prosemirror-inputrules": "1.5.1",
+    "prosemirror-keymap": "1.2.3",
+    "prosemirror-markdown": "1.13.7",
+    "prosemirror-model": "1.25.11",
+    "prosemirror-schema-list": "1.5.1",
+    "prosemirror-state": "1.4.4",
+    "prosemirror-view": "1.42.4",
     "three": "^0.152.2"
   },
   "devDependencies": {
+    "esbuild": "0.25.12",
+    "playwright": "1.61.1",
     "shadow-cljs": "^2.23.3"
   }
 }

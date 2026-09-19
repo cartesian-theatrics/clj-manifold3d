@@ -1,12 +1,24 @@
-{:paths ["src/clj" "src/cljc"]
+{:paths ["src/clj" "src/cljc" "src/cljs"]
  :deps {org.clojure/data.json {:mvn/version "2.4.0"}}
  :aliases
- {:cljs-prod
-  {:extra-deps {funcool/promesa {:mvn/version "10.0.594"}}
-   :extra-paths ["src/cljs" "src/js"]}
+ {:test-shared
+  {:extra-paths ["test/shared"]
+   :main-opts ["scripts/shared-tests.clj"]}
+
+  :cljs-prod
+  {:extra-paths ["src/cljs"]}
 
   :cljs-dev
-  {:extra-deps  {thheller/shadow-cljs {:mvn/version "2.22.9"}}}
+  {:extra-paths ["src/cljs" "test/cljs" "test/shared"]
+   :extra-deps {datascript/datascript {:mvn/version "1.7.8"}
+                thheller/shadow-cljs {:mvn/version "2.22.9"}
+                org.babashka/sci {:mvn/version "0.10.49"}}}
+
+  :journal-server
+  {:extra-paths ["src/clj" "src/cljc"]
+   :extra-deps {org.clojure/clojure {:mvn/version "1.12.0"}
+                io.replikativ/datahike {:mvn/version "0.7.1616"}}
+   :main-opts ["-m" "clj-manifold3d.journal.server"]}
 
   :clj-dev
   {:extra-deps {badigeon/badigeon {:mvn/version "1.7"}
@@ -28,7 +40,7 @@
                "--middleware" "[cider.nrepl/cider-middleware]"
                "--port" "7888"]}
 
-  :clj-test {:extra-paths ["test/cljc" "test/clj"]
+  :clj-test {:extra-paths ["test/cljc" "test/clj" "test/shared"]
              :extra-deps  {org.clojars.cartesiantheatrics/manifold3d$linux-x86_64
                            {:local/root "../manifold/bindings/java/target/manifold3d-1.0.39.jar"}
                            lambdaisland/kaocha {:mvn/version "1.88.1376"}

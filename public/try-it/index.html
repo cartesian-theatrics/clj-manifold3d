@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#202626">
+  <title>Manifold Lab · Try it!</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23e7aa73'/%3E%3Cpath d='M10 13l10-5 10 5v14l-10 5-10-5zm0 0l10 6 10-6M20 19v13' fill='none' stroke='%23202626' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/try-it/style.css">
+  <script type="importmap">{"imports":{"three":"/vendor/three/build/three.module.js"}}</script>
+</head>
+<body>
+  <header class="masthead">
+    <a class="brand" href="/" aria-label="Manifold Lab home">
+      <svg viewBox="0 0 32 36" aria-hidden="true"><path d="M16 2 30 10v16L16 34 2 26V10Zm0 16L2 10m14 8 14-8M16 18v16"/></svg>
+      <span>MANIFOLD <span class="brand-light">/ LAB</span></span>
+    </a>
+    <div class="local-badge"><i></i> LOCAL WORKSPACE <span class="separator">/</span> CLJS + WASM</div>
+  </header>
+
+  <main>
+    <section class="intro">
+      <div><div class="eyebrow">THE GEOMETRY PLAYGROUND</div><h1>Make something solid<span>.</span></h1></div>
+      <p>A few lines of ClojureScript.<br>A real, watertight model.</p>
+    </section>
+
+    <section class="workbench" aria-label="ClojureScript modeling playground">
+      <div class="editor-panel">
+        <div class="panel-heading"><div><span class="step">01</span><h2>Write the shape</h2></div><span class="language">CLOJURESCRIPT</span></div>
+        <div class="example-bar">
+          <label for="example">EXAMPLE</label>
+          <select id="example"><option value="loft">Twisted loft</option><option value="boolean">Boolean cut</option><option value="depth">American flag · UV</option><option value="animation">Pivot animation</option></select>
+          <button id="reset-code" class="text-button" title="Restore this example’s original code">Reset code</button>
+        </div>
+        <div class="editor-wrap">
+          <div id="code"></div>
+        </div>
+        <div class="run-bar"><span id="save-status">Changes stay in this browser</span><div><button id="stop" class="secondary" disabled>Stop</button><button id="run" class="primary" disabled><span aria-hidden="true">▶</span> Run code <kbd>⌘ / Ctrl ↵</kbd></button></div></div>
+        <div class="console-heading"><span>OUTPUT</span><span id="engine-status">Starting engine…</span></div>
+        <pre id="output" role="status" aria-live="polite">Loading the local modeling engine…</pre>
+      </div>
+
+      <div class="viewer-panel">
+        <div class="panel-heading"><div><span class="step">02</span><h2>See it take shape</h2></div><span id="model-state" class="model-state" data-state="loading">STARTING</span></div>
+        <div id="viewport" aria-label="Interactive 3D model viewer">
+          <div class="viewer-caption"><span id="model-title">Twisted loft</span><p id="model-description">One hollow profile. Thirteen frames. A little twist.</p></div>
+          <div id="loading" class="loading"><span class="spinner"></span><span id="loading-text">Warming up WASM</span></div>
+          <div class="view-tools"><button id="fit" title="Fit model to view">Fit view</button><button id="wireframe" aria-pressed="false">Wireframe</button><button id="grid" aria-pressed="true">Grid</button><button id="play" hidden aria-pressed="true">Pause</button></div>
+          <div class="orbit-hint">Drag to orbit <span>·</span> Scroll to zoom <span>·</span> Right-drag to pan</div>
+          <div class="axes" aria-hidden="true"><span>X</span><span>Y</span><span>Z ↑</span></div>
+        </div>
+        <div class="model-footer"><div id="stats">Your model will appear here</div><button id="download" class="download" disabled>↓ &nbsp; Download GLB</button></div>
+      </div>
+    </section>
+
+    <footer class="page-footer"><span><i></i> Runs in your browser. No geometry is uploaded.</span>
+      <details><summary>Quick reference &amp; limits</summary><div class="reference">
+        <p><code>m</code>, <code>texture</code>, <code>animation</code>, and <code>math</code> are ready to use. Explicit <code>require</code> is supported for these namespaces.</p>
+        <p>The editor highlights ClojureScript, auto-closes brackets and string quotes, and indents with Tab. Run with Ctrl/Cmd+Enter.</p>
+        <p>Return a Manifold, CrossSection (shown 1 unit thick), animation scene, or <code>{:geometry solid :texture png-bytes}</code>. Try <code>m/loft</code>, <code>m/difference</code>, <code>m/color</code>, or <code>texture/geodesic-uv</code>.</p>
+        <p><code>texture/bake</code> turns opaque, colored geometry into PNG bytes, viewed from +Z. The flag example draws its artwork in code, then maps it to a stepped-out sphere patch.</p>
+        <p>Frame rotations use radians; solid rotations use degrees. <code>(math/sin x)</code> and <code>math/pi</code> are available.</p>
+        <p>SCI interprets a CLJS subset, not the full CLJS compiler. Arbitrary JS, npm packages, and asset/file I/O aren’t exposed. Each Run starts a fresh context, releases its native handles, and has a 30-second timeout. Stop terminates the worker; the last good model stays visible.</p>
+      </div></details>
+    </footer>
+  </main>
+  <script type="module">
+    import {createEditor} from '/try-it/js/editor.js';
+    import {createViewer} from '/try-it/viewer.js';
+    try {
+      window.createManifoldEditor = createEditor;
+      window.manifoldViewer = createViewer(document.getElementById('viewport'));
+      const script = document.createElement('script');
+      script.src = '/try-it/js/main.js';
+      script.onerror = () => { document.getElementById('output').textContent = 'App bundle missing. Run npm run build:try-it, then reload.'; };
+      document.body.appendChild(script);
+    } catch (error) {
+      document.getElementById('output').textContent = 'The viewer could not start: ' + error.message;
+      document.getElementById('loading-text').textContent = 'WebGL is unavailable';
+    }
+  </script>
+</body>
+</html>

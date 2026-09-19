@@ -18,3 +18,14 @@ node_modules
 *.3ds
 
 target/
+public/wasm/
+public/js/
+public/fixtures/
+public/try-it/js/
+public/try-it/worker/
+public/maria/js/
+data/maria-datahike/
+data/maria-documents/
+public/journal/js/
+public/journal/worker/
+data/journal/

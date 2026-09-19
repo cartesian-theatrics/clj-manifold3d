@@ -10,7 +10,7 @@
   them well. For this reason, the CLJS API generally also works on non-promise objects."
   #?(:clj
      (:import
-      [manifold3d Manifold MeshUtils MeshUtils$LoftAlgorithm ManifoldVector FloatVector UIntVector]
+      [manifold3d Manifold Model MeshUtils MeshUtils$LoftAlgorithm ManifoldVector FloatVector UIntVector]
       [manifold3d.pub  SmoothnessVector Smoothness SimplePolygon Polygons PolygonsVector OpType]
       [manifold3d.manifold CrossSection CrossSectionVector Material ExportOptions MeshIO MeshGL]
       [manifold3d.linalg DoubleVec3 DoubleVec2 DoubleMat3x4 DoubleMat2x3 DoubleMat3x4Vector
@@ -19,6 +19,10 @@
   #?(:clj
      (:require
       [clj-manifold3d.impl :as impl]
+      [clj-manifold3d.model :as native-model]
+      [clj-manifold3d.animation :as animation]
+      [clj-manifold3d.glb :as glb]
+      [clj-manifold3d.spatial :as spatial]
       [clj-manifold3d.utils :as u])
      :cljs
      (:require
@@ -27,6 +31,17 @@
 
 #?(:cljs
    (def ^:dynamic *manifold-module* (manifold3d)))
+
+#?(:clj (do
+          (def model native-model/model)
+          (def model? native-model/model?)
+          (def texture native-model/texture)
+          (def model-info native-model/info)
+          (def sample-color native-model/sample-color)
+          (defn- require-untextured [operation objects]
+            (when (some model? objects)
+              (throw (ex-info "This operation needs a new-surface appearance policy; apply it before m/model or m/texture"
+                              {:operation operation}))))))
 
 #?(:cljs
    (defn update-manifold [manifold f]
@@ -174,7 +189,8 @@
                                (mod.Manifold. (mod.Mesh. (clj->js mesh))))))))
 #?(:clj
    (defn is-empty? [x]
-     (cond (manifold? x) (.isEmpty ^Manifold x)
+     (cond (model? x) (.isEmpty ^Model x)
+           (manifold? x) (.isEmpty ^Manifold x)
            (cross-section? x) (.isEmpty ^CrossSection x)
            :else (throw (IllegalArgumentException. (str "Should be Manifold or CrossSection. Recieved: " (type x)))))))
 
@@ -368,18 +384,20 @@ pseudo-normals to define the tangent vectors.
       angles. The default gives a hard edge, while values > 0 will give a small
       fillet on these sharp edges. A value of 1 is equivalent to a minSharpAngle of
       180 - all edges will be smooth."
-     ([^Manifold manifold]
+     ([manifold]
       (smooth-out manifold 60))
-     ([^Manifold manifold min-sharp-angle]
+     ([manifold min-sharp-angle]
       (smooth-out manifold min-sharp-angle 0))
-     ([^Manifold manifold min-sharp-angle min-smoothness]
-      (.smoothOut manifold min-sharp-angle min-smoothness))))
+     ([manifold min-sharp-angle min-smoothness]
+      (if (model? manifold) (.smoothOut ^Model manifold min-sharp-angle min-smoothness)
+          (.smoothOut ^Manifold manifold min-sharp-angle min-smoothness)))))
 
 (defn mirror
   "Mirrors manifold/cross-section over the plane/line desribed by the normal."
   ([obj normal]
    #?(:clj (let [csg (impl/to-csg obj)]
-             (cond (manifold? csg) (.mirror ^Manifold csg (DoubleVec3. (nth normal 0) (nth normal 1) (nth normal 2)))
+             (cond (model? csg) (.mirror ^Model csg (DoubleVec3. (nth normal 0) (nth normal 1) (nth normal 2)))
+                   (manifold? csg) (.mirror ^Manifold csg (DoubleVec3. (nth normal 0) (nth normal 1) (nth normal 2)))
                    (cross-section? csg) (.mirror ^CrossSection csg (DoubleVec2. (nth normal 0) (nth normal 1)))
                    :else
                    (throw (IllegalArgumentException. (str "Must be Manifold or CrossSection. Recieved: " (type csg))))))
@@ -391,7 +409,8 @@ pseudo-normals to define the tangent vectors.
    (defn refine
      "partitions every edge of the Manifold into `n` edges of equal length. CLJ only."
      ([manifold n]
-      (.refine ^Manifold (impl/to-csg manifold) n))))
+      (if (model? manifold) (.refine ^Model manifold n)
+          (.refine ^Manifold (impl/to-csg manifold) n)))))
 
 #?(:clj
    (defn calculate-normals
@@ -408,8 +427,9 @@ pseudo-normals to define the tangent vectors.
  edge. By default, no edges are sharp and all normals are shared. With a value
  of zero, the model is faceted and all normals match their triangle normals,
  but in this case it would be better not to calculate normals at all."
-     ([^Manifold manifold normal-idx min-sharp-angle]
-      (.calculateNormals manifold normal-idx min-sharp-angle))))
+     ([manifold normal-idx min-sharp-angle]
+      (if (model? manifold) (.calculateNormals ^Model manifold normal-idx min-sharp-angle)
+          (.calculateNormals ^Manifold manifold normal-idx min-sharp-angle)))))
 
 #?(:clj
    (defn refine-to-length
@@ -418,8 +438,9 @@ roughly the input `length`. Interior verts are added to keep the rest of the
 triangulation edges also of roughly the same length. If halfedgeTangents are
 present (e.g. from the Smooth() constructor), the new vertices will be moved
 to the interpolated surface according to their barycentric coordinates."
-     [^Manifold manifold length]
-     (.refineToLength manifold length)))
+     [manifold length]
+     (if (model? manifold) (.refineToLength ^Model manifold length)
+         (.refineToLength ^Manifold manifold length))))
 
 (defn revolve
   "Revolve a `CrossSection` around the y-axis to create a `Manifold`.
@@ -450,6 +471,7 @@ to the interpolated surface according to their barycentric coordinates."
   #?(:clj ([a]
            (if (sequential? a) (apply hull a)
                (let [csg (impl/to-csg a)]
+                 (require-untextured :hull [csg])
                  (cond (manifold? csg) (.convexHull ^Manifold csg)
                        (cross-section? csg) (.convexHull ^CrossSection csg)
                        :else
@@ -457,6 +479,7 @@ to the interpolated surface according to their barycentric coordinates."
   ([a b]
    #?(:clj (let [ca (impl/to-csg a)
                  cb (impl/to-csg b)]
+             (require-untextured :hull [ca cb])
              (cond (manifold? ca)
                    (let [v (doto (ManifoldVector.)
                              (.pushBack ca)
@@ -475,7 +498,9 @@ to the interpolated surface according to their barycentric coordinates."
                      (.convexHull a b)))))
   ([a b & more]
    #?(:clj
-      (if (manifold? a)
+      (do
+       (require-untextured :hull (list* a b more))
+       (if (manifold? a)
         (let [^ManifoldVector v (ManifoldVector.)]
           (doseq [man (list* a b more)]
             (.pushBack v man))
@@ -483,7 +508,7 @@ to the interpolated surface according to their barycentric coordinates."
         (let [^CrossSectionVector v (CrossSectionVector.)]
           (doseq [section (list* a b more)]
             (.pushBack v section))
-          ^CrossSection (CrossSection/ConvexHull v)))
+          ^CrossSection (CrossSection/ConvexHull v))))
       :cljs (reduce hull (hull a b) more))))
 
 (defn union
@@ -540,12 +565,15 @@ to the interpolated surface according to their barycentric coordinates."
 (defn compose
   "Purely topological join of a sequence of manifolds. Care should be taken to avoid overlapping results."
   ([manifolds]
-   #?(:clj (if (manifold? (first manifolds))
+   #?(:clj (cond
+             (some model? manifolds)
+             (reduce #(.compose ^Model %1 ^Model (model %2)) (model (first manifolds)) (rest manifolds))
+             (manifold? (first manifolds))
              (Manifold/Compose (let [v (ManifoldVector.)]
                                  (doseq [man manifolds]
                                    (.pushBack v man))
                                  v))
-             (CrossSection/Compose (let [v (CrossSectionVector.)]
+             :else (CrossSection/Compose (let [v (CrossSectionVector.)]
                                      (doseq [man manifolds]
                                        (.pushBack v man))
                                      v)))
@@ -559,7 +587,9 @@ to the interpolated surface according to their barycentric coordinates."
 (defn decompose
   "Inverse of compose."
   [obj]
-  #?(:clj (cond (manifold? obj) (seq (.decompose ^Manifold obj))
+  #?(:clj (cond (model? obj) (with-open [parts (.decompose ^Model obj)]
+                              (mapv #(.get parts %) (range (.size parts))))
+                (manifold? obj) (seq (.decompose ^Manifold obj))
                 (cross-section? obj) (seq (.decompose ^CrossSection obj))
                 :else (throw (IllegalArgumentException. (str "Input must be Manifold or CrossSection. Recieved: " (type obj)))))
      :cljs (update-manifold obj
@@ -569,7 +599,8 @@ to the interpolated surface according to their barycentric coordinates."
   "Scale `obj` (Manifold or CrossSection). `sv` is a [scale-x scale-y] vector for cross-sections and a
   [scale-x scale-y scale-z] vector for Manifolds."
   ([obj sv]
-   #?(:clj (cond (manifold? obj) (.scale ^Manifold obj (DoubleVec3. (nth sv 0) (nth sv 1) (nth sv 2)))
+   #?(:clj (cond (model? obj) (.scale ^Model obj (DoubleVec3. (nth sv 0) (nth sv 1) (nth sv 2)))
+                 (manifold? obj) (.scale ^Manifold obj (DoubleVec3. (nth sv 0) (nth sv 1) (nth sv 2)))
                  (cross-section? obj) (.scale ^CrossSection obj (DoubleVec2. (nth sv 0) (nth sv 1)))
                  :else (throw (IllegalArgumentException. (str "Must be Manifold or CrossSection. Received:" (type obj)))))
       :cljs (.then obj
@@ -579,7 +610,8 @@ to the interpolated surface according to their barycentric coordinates."
 (defn bounds
   "Get the bounding `manifold3d.pub.Box` for Manifolds or `manifold3d.pub.Rect` for CrossSections."
   ([obj]
-   #?(:clj (cond (manifold? obj) (.boundingBox ^Manifold obj)
+   #?(:clj (cond (model? obj) (.boundingBox ^Model obj)
+                 (manifold? obj) (.boundingBox ^Manifold obj)
                  (cross-section? obj) (.bounds ^CrossSection obj)
                  (satisfies? impl/ICSGConvertable obj) (bounds (impl/to-csg obj))
                  :else (throw (IllegalArgumentException. (str "Must be Manifold or CrossSection. Received: " (type obj)))))
@@ -592,14 +624,16 @@ to the interpolated surface according to their barycentric coordinates."
      "Get the z-height of a manifold or y-height of a cross section."
      [obj]
      (let [x (impl/to-csg obj)]
-       (cond (cross-section? obj) (-> ^CrossSection x (.bounds) (.Size) (.y))
-             (manifold? obj) (-> ^Manifold x (.boundingBox) (.Size) (.z))))))
+       (cond (model? x) (-> ^Model x (.boundingBox) (.Size) (.z))
+             (cross-section? x) (-> ^CrossSection x (.bounds) (.Size) (.y))
+             (manifold? x) (-> ^Manifold x (.boundingBox) (.Size) (.z))))))
 
 #?(:clj
    (defn get-properties
-     ([^Manifold manifold]
-      {:surface-area (double (.surfaceArea manifold))
-       :volume (double (.volume manifold))})))
+     ([manifold]
+      (if (model? manifold)
+        {:surface-area (.surfaceArea ^Model manifold) :volume (.volume ^Model manifold)}
+        {:surface-area (.surfaceArea ^Manifold manifold) :volume (.volume ^Manifold manifold)}))))
 
 #?(:clj
    (defn area
@@ -613,6 +647,7 @@ to the interpolated surface according to their barycentric coordinates."
    (trim-by-plane manifold normal 0.0))
   ([manifold normal origin-offset]
    #?(:clj (let [[x y z] normal]
+             (require-untextured :trim-by-plane [manifold])
              (.trimByPlane ^Manifold manifold (DoubleVec3. x y z) origin-offset))
       :cljs (let [[x y z] normal]
               (update-manifold manifold
@@ -633,6 +668,7 @@ to the interpolated surface according to their barycentric coordinates."
       (split-by-plane manifold normal 0.0))
      ([manifold normal origin-offset]
       (let [[x y z] normal]
+        (require-untextured :split-by-plane [manifold])
         ;; Pair members are borrowed native references. Copy them before the
         ;; owning pair is closed or collected; callers retain the returned solids.
         (with-open [pair (.splitByPlane ^Manifold manifold (DoubleVec3. x y z) origin-offset)]
@@ -644,9 +680,11 @@ to the interpolated surface according to their barycentric coordinates."
      "Cuts `manifold` with the `cutter-manifold`. Returns vector of intersection and difference.
   More efficient than doing each operation separately. CLJ only."
      ([manifold cutter-manifold]
-      (with-open [ret (.split ^Manifold manifold cutter-manifold)]
-        [(Manifold. ^Manifold (.first ret))
-         (Manifold. ^Manifold (.second ret))]))))
+      (if (or (model? manifold) (model? cutter-manifold))
+        [(intersection manifold cutter-manifold) (difference manifold cutter-manifold)]
+        (with-open [ret (.split ^Manifold manifold cutter-manifold)]
+          [(Manifold. ^Manifold (.first ret))
+           (Manifold. ^Manifold (.second ret))])))))
 
 #?(:clj
    (defn frame
@@ -780,16 +818,16 @@ to the interpolated surface according to their barycentric coordinates."
 (defn get-mesh
   "Calculates and returns the Manifold's mesh. Note that most of the CSG work is done when running this function."
   [manifold]
-  #?(:clj (.getMesh ^Manifold manifold)
+  #?(:clj (if (model? manifold) (.getMeshGL ^Model manifold) (.getMesh ^Manifold manifold))
      :cljs (update-manifold manifold (fn [man] (.getMesh man)))))
 
 #?(:clj
    (defn get-mesh-gl
      "Calculates and returns the Manifold's mesh. Note that most of the CSG work is done when running this function."
      ([manifold]
-      (.getMeshGL ^Manifold (impl/to-csg manifold) -1))
+      (if (model? manifold) (.getMeshGL ^Model manifold) (.getMeshGL ^Manifold (impl/to-csg manifold) -1)))
      ([manifold normal-idx]
-      (.getMeshGL ^Manifold (impl/to-csg manifold) normal-idx))))
+      (if (model? manifold) (.getMeshGL ^Model manifold normal-idx) (.getMeshGL ^Manifold (impl/to-csg manifold) normal-idx)))))
 
 #?(:clj
    (defn- fill-rule->enum [fill-rule]
@@ -996,7 +1034,7 @@ to the interpolated surface according to their barycentric coordinates."
    (defn status
      "Get manifold error status."
      [manifold]
-     (case (.status ^Manifold manifold)
+     (case (if (model? manifold) (.status ^Model manifold) (.status ^Manifold manifold))
        0 :NoError
        1 :NonFiniteVertex
        2 :NotManifold
@@ -1021,10 +1059,13 @@ to the interpolated surface according to their barycentric coordinates."
   Note, to export maniofolds with color propertes, you need to specify the color property index
   in the material, e.x.  (material :roughness 0.0 :metalness 0.0 :color-channels [3 4 5 6])"
      ([man rgba]
-      (color ^Manifold man rgba 3))
+      (color man rgba 3))
      ([man rgba prop-index]
       (let [[r g b a] rgba]
-        (MeshUtils/ColorVertices ^Manifold man (DoubleVec4. r g b a) prop-index)))))
+        (if (model? man)
+          (do (when-not (= prop-index 3) (throw (ex-info "Model manages its color channels" {})))
+              (.color ^Model man (DoubleVec4. r g b a)))
+          (MeshUtils/ColorVertices ^Manifold man (DoubleVec4. r g b a) prop-index))))))
 
 
 #?(:clj
@@ -1176,31 +1217,19 @@ to the interpolated surface according to their barycentric coordinates."
    (defn get-vertices
      "Get vertices of `man`."
      [man]
-     (let [^floats vertices (.toFloatArray (.getVertices ^Manifold man))]
-       (loop [idx 0
-              ret (transient [])]
-         (if (>= idx (alength vertices))
-           (persistent! ret)
-           (recur
-            (+ idx 3)
-            (conj! ret [(aget vertices idx)
-                        (aget vertices (+ idx 1))
-                        (aget vertices (+ idx 2))])))))))
+     (with-open [^MeshGL mesh (get-mesh-gl man)]
+       (let [^FloatVector props (.vertProperties mesh) stride (.numProp mesh)]
+         (mapv (fn [i] (mapv #(.get props (+ (* i stride) %)) (range 3)))
+               (range (.NumVert mesh)))))))
 
 #?(:clj
    (defn get-triangles
      "Get triangles of `man`."
      [man]
-     (let [^ints triangles (.toIntArray (.getTriangles ^Manifold man))]
-       (loop [idx 0
-              ret (transient [])]
-         (if (>= idx (alength triangles))
-           (persistent! ret)
-           (recur
-            (+ idx 3)
-            (conj! ret [(aget triangles idx)
-                        (aget triangles (+ idx 1))
-                        (aget triangles (+ idx 2))])))))))
+     (with-open [^MeshGL mesh (get-mesh-gl man)]
+       (let [^UIntVector indices (.triVerts mesh)]
+         (mapv (fn [i] (mapv #(.get indices (+ (* i 3) %)) (range 3)))
+               (range (.NumTri mesh)))))))
 
 #?(:clj
    (defn get-face-normals [man]
@@ -1256,6 +1285,60 @@ to the interpolated surface according to their barycentric coordinates."
       (MeshIO/ImportMesh filename force-cleanup?))))
 
 (defn -main [& args])
+
+#?(:clj
+   (defn mesh-merge
+     "Return a copy with geometric seam merges reconstructed by native MeshGL.Merge.
+     Best effort: check (status (manifold result)) before using imported triangle soup."
+     [mesh]
+     (doto (MeshGL. ^MeshGL mesh) (.Merge))))
+
+#?(:clj
+   (defn export-model
+     "Export a native Model or scene as GLB, or a bare Manifold via MeshIO.
+     For scenes, nil filename returns GLB bytes; scene assets retain appearance."
+     [object filename & options]
+     (cond
+       (model? object) (apply native-model/export-model object filename options)
+       (map? object) (do (when (seq options)
+                          (throw (ex-info "Scene export uses per-node :material, not export options" {:options options})))
+                        (animation/export-scene object filename))
+       :else (apply export-mesh (get-mesh-gl object) filename options))))
+
+#?(:clj
+   (do
+     (defn scene
+       "Create a scene from :nodes (IDs, geometry, transforms, children) and
+       optional :animations. Nodes accept Manifold or textured Model geometry."
+       [data] (animation/scene data))
+     (defn scene?
+       "Is x an authored scene or imported GLB document?"
+       [x] (animation/scene? x))
+     (defn export-scene
+       "Write a scene to GLB; nil filename returns bytes."
+       [value filename]
+       (animation/export-scene value filename))
+     (defn import-scene
+       "Read an embedded GLB filename or bytes without flattening the scene.
+       See clj-manifold3d.scene for immutable editing and animation sampling."
+       [source] (glb/read-glb source))
+     (defn spatial-index
+       "Build a reusable native BVH snapshot of a Manifold or Model; with-open supported."
+       [object] (spatial/spatial-index object))
+     (defn ray-cast
+       "Nearest forward hit or nil; accepts geometry or a spatial-index."
+       [object origin direction & options]
+       (apply spatial/ray-cast object origin direction options))
+     (defn closest-point
+       "Nearest surface point, unsigned distance, and normal; nil for empty geometry."
+       [object point] (spatial/closest-point object point))
+     (defn contains-point?
+       "Point containment including boundary; options :tolerance and :boundary?."
+       [object point & options]
+       (apply spatial/contains-point? object point options))
+     (defn overlap?
+       "Native BVH intersection/contact/containment; optional :tolerance in model units."
+       [a b & options] (apply spatial/overlap? a b options))))
 
 
 (comment

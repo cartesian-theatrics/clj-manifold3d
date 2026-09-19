@@ -181,6 +181,24 @@
   (mapv double value))
 
 
+(defn- depth-input [value]
+  (if (string? value)
+    {:image value}
+    (do
+      (when-not (and (sequential? value) (<= 2 (count value))
+                     (every? sequential? value))
+        (throw (ex-info ":depth-map must be an image filename or a rectangular numeric grid"
+                        {:depth-map value})))
+      (let [height (count value)
+            width (count (first value))]
+        (when-not (and (<= 2 width) (<= (* width height) 2000000)
+                       (every? #(= width (count %)) value)
+                       (every? finite-number? (mapcat identity value)))
+          (throw (ex-info "Depth grid must be rectangular, finite, and between 2x2 and two million samples"
+                          {:width width :height height})))
+        {:values (double-array (mapcat identity value))
+         :width width :height height}))))
+
 (defn geodesic-uv
   "Lay a rectangular image onto a local surface using native plane-cut walks.
 
@@ -189,24 +207,56 @@
   is walked along the center baseline, height along each column. `:pixel-size`
   is the distance between surface samples (default: min(width,height)/32).
   Samples and edge crossings subdivide the original faces locally, preserving
-  the surface and existing properties. No per-vertex JVM callbacks are used.
+  the surface and existing properties before optional depth displacement.
+  No per-vertex JVM callbacks are used.
 
   UVs occupy `:uv-rect` [u-min v-min u-max v-max], with image top toward +V.
   The sticker boundary has separate inside/outside property vertices joined
   geometrically, so :outside-uv cannot smear into the image. `:prop-index`
   is an absolute MeshGL offset and defaults to :append.
 
+  Optional `:depth-map` is an image filename or a rectangular grid of signed
+  numbers (rows run top to bottom). Samples are bilinearly interpolated in
+  local image coordinates, independently of :uv-rect. Displacement in model
+  units is sample * :depth-scale + :depth-offset (defaults 1 and 0). Smooth
+  surfaces use the original interpolated, angle-weighted normal. Positive is
+  outward; negative engraves. Images decode natively to grayscale [0,1],
+  preserving 16-bit PNG precision; alpha is ignored.
+
+  Sharp planar corners automatically use a common miter direction whose dot
+  product with each face normal is 1. Depth remains the normal distance from
+  each original plane, with tangential motion to keep the whole chart joined.
+  An inner square corner thus moves by [d d d], not a unit diagonal times d.
+  This supports patches with two or three planar face orientations; more
+  complex sharp joins and miters longer than eight times depth are rejected.
+
+  `:depth-boundary` is :fade (default) or :step. With :fade, `:depth-fade`
+  smoothly returns depth to zero at the patch edge, in model units. Its
+  default is twice :pixel-size, capped at half the patch size.
+  With zero fade, every boundary depth sample must already be zero. :step
+  retains boundary depth and adds watertight side walls using :outside-uv;
+  its fade must be zero. Sign changes between boundary vertices are rejected
+  unless a vertex samples the zero crossing. The original surface is
+  unchanged outside the patch. Local triangle folds are rejected,
+  but global self-intersections are not checked: keep depth modest relative
+  to local curvature, thickness, and nearby surfaces.
+
   This is a plane-cut chart, not a shortest-geodesic or stretch-free unwrap.
   The patch must remain a single sheet over its local tangent plane; folds,
   tangencies and incomplete coverage throw. Refine smooth tangent input first."
   [manifold-object & {:keys [origin u-direction normal size uv-rect outside-uv
-                             prop-index pixel-size]
+                             prop-index pixel-size depth-map depth-scale
+                             depth-offset depth-fade depth-boundary]
                       :or {uv-rect [0.0 0.0 1.0 1.0]
                            outside-uv [0.0 0.0]
-                           prop-index :append}
+                           prop-index :append
+                           depth-scale 1.0
+                           depth-offset 0.0
+                           depth-boundary :fade}
                       :as options}]
   (when-let [unknown (seq (remove #{:origin :u-direction :normal :size :uv-rect
-                                   :outside-uv :prop-index :pixel-size}
+                                   :outside-uv :prop-index :pixel-size :depth-map
+                                   :depth-scale :depth-offset :depth-fade :depth-boundary}
                                  (keys options)))]
     (throw (ex-info "Unknown surface mapping options" {:options unknown})))
   (when-not (manifold/manifold? manifold-object)
@@ -231,8 +281,49 @@
                      (.numProp mesh)
                      (validate-prop-index! prop-index))
         [u-min v-min u-max v-max] uv-rect
-        [width height] size]
-    (MeshUtils/GeodesicUV manifold-object
+        [width height] size
+        depth (when (some? depth-map) (depth-input depth-map))
+        _ (when-not (#{:fade :step} depth-boundary)
+            (throw (ex-info ":depth-boundary must be :fade or :step"
+                            {:depth-boundary depth-boundary})))
+        depth-fade (if (some? depth-fade) depth-fade
+                       (if (= :step depth-boundary) 0.0
+                           (min (* 2.0 pixel-size) (/ width 2.0) (/ height 2.0))))
+        _ (when-not (and (finite-number? depth-scale) (finite-number? depth-offset)
+                         (finite-number? depth-fade) (<= 0 depth-fade))
+            (throw (ex-info "Depth scale/offset must be finite and fade must be nonnegative"
+                            {:depth-scale depth-scale :depth-offset depth-offset
+                             :depth-fade depth-fade})))
+        _ (when (and (nil? depth)
+                     (some #(contains? options %) [:depth-scale :depth-offset :depth-fade :depth-boundary]))
+            (throw (ex-info "Depth options require :depth-map" {})))]
+    (cond
+      (:image depth)
+      (MeshUtils/GeodesicUVDepthImage
+        manifold-object (long prop-index)
+        (double (nth origin 0)) (double (nth origin 1)) (double (nth origin 2))
+        (double (nth normal 0)) (double (nth normal 1)) (double (nth normal 2))
+        (double (nth u-direction 0)) (double (nth u-direction 1)) (double (nth u-direction 2))
+        (double width) (double height)
+        (double u-min) (double v-min) (double (- u-max u-min)) (double (- v-max v-min))
+        (double (first outside-uv)) (double (second outside-uv)) (double pixel-size)
+        ^String (:image depth) (double depth-scale) (double depth-offset) (double depth-fade)
+        (= :step depth-boundary))
+
+      depth
+      (MeshUtils/GeodesicUVDepth
+        manifold-object (long prop-index)
+        (double (nth origin 0)) (double (nth origin 1)) (double (nth origin 2))
+        (double (nth normal 0)) (double (nth normal 1)) (double (nth normal 2))
+        (double (nth u-direction 0)) (double (nth u-direction 1)) (double (nth u-direction 2))
+        (double width) (double height)
+        (double u-min) (double v-min) (double (- u-max u-min)) (double (- v-max v-min))
+        (double (first outside-uv)) (double (second outside-uv)) (double pixel-size)
+        ^doubles (:values depth) (int (:width depth)) (int (:height depth))
+        (double depth-scale) (double depth-offset) (double depth-fade) (= :step depth-boundary))
+
+      :else
+      (MeshUtils/GeodesicUV manifold-object
                            (long prop-index)
                            (double (first origin))
                            (double (second origin))
@@ -251,7 +342,7 @@
                            (double (- v-max v-min))
                            (double (first outside-uv))
                            (double (second outside-uv))
-                           (double pixel-size))))
+                           (double pixel-size)))))
 
 (defn geodesic-uv-native
   "Native surface-walk mapping; see `geodesic-uv` for options and limits."

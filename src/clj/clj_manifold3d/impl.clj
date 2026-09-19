@@ -1,5 +1,6 @@
 (ns clj-manifold3d.impl
-  (:import [manifold3d Manifold ManifoldVector]
+  (:require [clj-manifold3d.model :as model])
+  (:import [manifold3d Manifold ManifoldVector Model]
            [manifold3d.pub SmoothnessVector Smoothness SimplePolygon OpType SimplePolygon Polygons]
            [manifold3d.manifold CrossSection MeshIO ExportOptions CrossSectionVector CrossSection$FillRule]
            [manifold3d.linalg DoubleVec3 DoubleVec2 DoubleMat3x4 DoubleMat2x3 MatrixTransforms]))
@@ -22,6 +23,8 @@
   (to-polygons [this]))
 
 (extend-protocol ICSGConvertable
+  Model
+  (to-csg [this] this)
   Manifold
   (to-csg [this] this)
   CrossSection
@@ -33,20 +36,27 @@
                                 (.ordinal CrossSection$FillRule/NonZero))))
 
 (extend-protocol ICSG
+  Model
+  (batch-boolean [this xs op] (reduce #(.booleanOp ^Model %1 (model/model %2) op) this xs))
+  (union [this other] (.booleanOp this (model/model other) 0))
+  (difference [this other] (.booleanOp this (model/model other) 1))
+  (intersection [this other] (.booleanOp this (model/model other) 2))
   Manifold
   (batch-boolean [this xs op]
-    (Manifold/BatchBoolean
+    (if (some model/model? xs)
+      (batch-boolean (model/model this) xs op)
+      (Manifold/BatchBoolean
      (let [v (ManifoldVector.)]
        (doseq [x (cons this xs)]
          (.pushBack v x))
        v)
-     op))
+     op)))
   (union [this o]
-    (.add this o))
+    (if (model/model? o) (union (model/model this) o) (.add this o)))
   (difference [this o]
-    (.subtract this o))
+    (if (model/model? o) (difference (model/model this) o) (.subtract this o)))
   (intersection [this o]
-    (.intersect this o))
+    (if (model/model? o) (intersection (model/model this) o) (.intersect this o)))
 
   CrossSection
   (to-csg [this] this)
@@ -74,6 +84,10 @@
   (to-polygons [this] this))
 
 (extend-protocol ITransformable
+  Model
+  (rotate [this v] (.rotate this (nth v 0) (nth v 1) (nth v 2)))
+  (translate [this v] (.translate this (DoubleVec3. (nth v 0) (nth v 1) (nth v 2))))
+  (transform [this matrix] (.transform this matrix))
   CrossSection
   (rotate [this degrees]
     (.rotate this degrees))

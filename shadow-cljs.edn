@@ -1,14 +1,44 @@
-{:source-paths ["src/cljs" "src/js"]
- :deps {:aliases [:cljs-dev]}
+{:deps {:aliases [:cljs-dev]}
  :builds
- {:app
-  {:target :browser
-   :output-dir "public/js"
-   :asset-path "/js"
-   :modules {:main {:init-fn clj-manifold3d.core/init}}
-   :compiler-options
-   {:output-feature-set :es-next}
-   :devtools
-   {:after-load my-app.core/after-load
-    :http-root "public"
-    :http-port 8080}}}}
+ {:try-it {:target :browser
+           :output-dir "public/try-it/js"
+           :asset-path "/try-it/js"
+           :modules {:main {:init-fn clj-manifold3d.try-it.app/main}}
+           :compiler-options {:infer-externs :auto :output-feature-set :es2020}}
+  :try-it-worker {:target :browser
+                  :output-dir "public/try-it/worker"
+                  :asset-path "/try-it/worker"
+                  :modules {:worker {:init-fn clj-manifold3d.try-it.worker/main :web-worker true}}
+           :compiler-options {:infer-externs :auto :output-feature-set :es2020}}
+  :journal {:target :browser
+          :output-dir "public/journal/js"
+          :asset-path "/journal/js"
+          :modules {:main {:init-fn clj-manifold3d.journal.app/main}}
+          :compiler-options {:infer-externs :auto
+                             :externs ["datascript/externs.js"]
+                             :output-feature-set :es2020}}
+  :journal-worker {:target :browser
+                 :output-dir "public/journal/worker"
+                 :asset-path "/journal/worker"
+                 :modules {:worker {:init-fn clj-manifold3d.journal.worker/main
+                                    :web-worker true}}
+                 :compiler-options {:infer-externs :auto
+                                    :externs ["datascript/externs.js"]
+                                    :output-feature-set :es2020}}
+  :journal-test {:target :node-script
+                 :output-to "target/journal-tests.js"
+                 :main clj-manifold3d.journal-state-test/main
+                 :compiler-options {:infer-externs :auto :output-feature-set :es2020
+                                    :externs ["datascript/externs.js"]
+                                    :elide-asserts false :load-tests true}}
+  :test {:target :node-script
+         :output-to "target/cljs-tests.js"
+         :main clj-manifold3d.test-runner/main
+         :compiler-options {:infer-externs :auto :output-feature-set :es2020
+                            :elide-asserts false :load-tests true}}
+  :browser-test {:target :browser
+                 :output-dir "public/js"
+                 :asset-path "/js"
+                 :modules {:main {:init-fn clj-manifold3d.browser-runner/main}}
+                 :compiler-options {:infer-externs :auto :output-feature-set :es2020
+                                    :elide-asserts false :load-tests true}}}}

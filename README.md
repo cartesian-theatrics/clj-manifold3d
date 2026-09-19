@@ -35,7 +35,204 @@ cmake --build . --config Release
 cmake --install . --config Release
 ```
 
-The ClojureScript lib is not yet well supported or available via. Maven. You'll have to clone the repo and move `public/manifold.wasm` into `public/js/`. Run `npm install` to install the gltf (for rendering meshes) then connect via. shadow. There's a half-baked function called `createGLTF` in `manifold_viewer.js` that will take a manifold and throw it onto the `model-viewer` element defined in the index.html.
+For ClojureScript, use this checkout (for example a `:local/root` dependency)
+and build the matching WASM bindings as described below. Java/JNI dependencies
+are not required by CLJS applications. Old generated loaders under `src/js`
+and the original viewer prototype are not used by the current bindings.
+
+## scad-etc construction patterns
+
+`clj-manifold3d.builders` is a small `.cljc` namespace for patterns that recur
+in the native portions of `scad-etc`; it is intentionally not a second general
+modeling DSL. It packages batched `fuse`, `cut`, and `hull`, translated-copy
+helpers (`copies-at`, `fuse-at`, `hull-at`), `disks-at`, rectangular
+`bolt-pattern`, 2D `capsule`, 3D `rod-between`/`rods-between`, hollow `tube`,
+and `torus`.
+
+```clojure
+(require '[clj-manifold3d.core :as m]
+         '[clj-manifold3d.builders :as b])
+
+(let [holes (b/disks-at (/ hole-diameter 2) hole-centers facets)
+      plate (b/cut (m/square plate-width plate-height true) holes)
+      rods (b/rods-between (map (juxt :start :end) rod-specs)
+                           (/ rod-diameter 2) facets)]
+  (b/fuse (m/extrude plate plate-thickness) rods))
+```
+
+These helpers came from repeated `apply m/union`, translated-circle fields,
+slot hulls, and duplicated point-to-point rod frames in `scad-etc`. They keep
+the normal immutable `m/*` values, so a result can continue through `->`,
+boolean operations, appearance functions, or export.
+
+## ClojureScript / WASM
+
+### Local “Try it!” playground
+
+After `npm ci` and `npm run build:wasm`, run:
+
+```sh
+npm run try-it
+```
+
+Open **http://localhost:8091/**. The page starts with an editable twisted loft,
+an orbitable Three.js model viewer, wireframe/grid controls, and GLB download.
+Other examples demonstrate booleans, a raised American-flag UV patch, and a playing pivot
+animation with its full scene hierarchy and quaternion keyframes in the editor.
+The CodeMirror editor provides ClojureScript syntax highlighting, matching
+brackets, automatic closing parentheses/brackets/quotes, indentation, and undo.
+Run code with the button or Ctrl/Cmd+Enter; edits are saved locally per example.
+Set `PORT` to change the server port.
+
+The editor uses [SCI](https://github.com/babashka/sci) to interpret a CLJS subset
+against the real native bindings. It is not a self-hosted full CLJS compiler.
+`m`, `texture`, `animation`, and `math` are preconfigured; explicit `require`
+for those namespaces works too. Return a solid, cross-section, scene, or
+`{:geometry solid :texture png-bytes :prop-index 3}` for a textured model.
+The flag example draws 13 stripes and 50 stars using `m/cube`, `m/cross-section`,
+and `m/color`, bakes the colored geometry with `texture/bake`, then maps it onto
+a sphere with native `texture/geodesic-uv` and `:depth-boundary :step`.
+`texture/bake` is a synchronous CLJS helper for unlit, opaque +Z projections;
+it supports Node and browser workers. Its colors are linear RGBA (like `m/color`),
+encoded as an sRGB PNG. No external flag image or network request is involved.
+Arbitrary JS/npm imports and asset/file I/O are not exposed in the editor.
+
+Evaluation runs entirely in a dedicated browser worker, with a fresh context
+and native-handle cleanup each time. Stop (or the 30-second timeout) terminates
+and restarts the worker. Errors preserve the previous model. The local server
+serves static app/WASM/Three.js files only, binds to loopback, and never executes
+submitted code. Worker isolation is for responsiveness, not a hard browser
+memory quota or a security guarantee for running hostile programs.
+
+`npm run build:try-it` bundles the editor and compiles both the app and worker
+with Closure advanced optimizations; `npm run serve:try-it` serves the existing build. Run
+`npm run test:try-it` after building to check the actual viewer, editable loft,
+GLB download, editor highlighting/bracket pairing, errors, infinite-loop
+cancellation, animation, baked flag colors/stars/UVs/displacement, persistence,
+and mobile layout in Chromium. No CDN or external service is needed at runtime.
+
+The implementation in `src/cljs/clj_manifold3d` uses the same native geometry
+algorithms as the JVM, including halfedge surface mapping, UV unwrapping,
+image/numeric depth, stepped boundaries, and inner-corner miters. Modeling
+operations are synchronous and immutable **after awaiting `init!` once**.
+This replaces the old experimental promise-per-operation API.
+
+### Build and test
+
+Prerequisites: Node 18+, npm, Clojure CLI/JDK, CMake, and an activated Emscripten
+SDK (tested with Emscripten 3.1.64). The sibling `../manifold` checkout must
+include the WASM MeshUtils extensions. The JVM tests additionally need the
+local native JAR and its system libraries described above.
+
+```sh
+source /path/to/emsdk/emsdk_env.sh
+npm ci
+npm run build:wasm
+npx playwright install chromium
+npm test
+```
+
+`build:wasm` compiles the C++ sources in `../manifold` into a separate
+`build-cljs` directory; it never reuses native object files or the old checked-in
+WASM. Override `MANIFOLD_SOURCE`, `MANIFOLD_WASM_BUILD`, or `BUILD_JOBS` if needed.
+Generated artifacts are ignored by git:
+
+- `public/wasm/manifold.js` and `manifold.wasm`: browser loader and binary.
+- `target/wasm/manifold.cjs` and `manifold.wasm`: Node loader and binary.
+
+`npm test` runs the shared `.cljc` behavioral tests on the JVM, generates JVM
+reference fixtures, then runs CLJS in Node (development and Closure **advanced**)
+and headless Chromium (advanced). Individual commands are `test:shared:jvm`,
+`fixtures:jvm`, `test:cljs`, `test:advanced`, and `test:browser`.
+Run `fixtures:jvm` before standalone CLJS tests. `CHROMIUM_PATH` can select an
+existing Chromium executable. No application or REPL is stopped by these tests.
+
+Portable assertions live in `test/shared/clj_manifold3d/portable_*_test.cljc`;
+`test_support.cljc` adapts only platform representations and file I/O. Browser,
+WASM ownership, async assets, and mesh-codec integration tests also exercise the
+optimized builds. The test configuration explicitly retains tests in release
+builds and fails if zero tests execute.
+
+### Browser usage
+
+Load the generated loader before your compiled application:
+
+```html
+<script src="/wasm/manifold.js"></script>
+<script src="/js/app.js"></script>
+```
+
+```clojure
+(ns example.app
+  (:require [clj-manifold3d.core :as m]
+            [clj-manifold3d.texture :as texture]))
+
+(-> (m/init! {:wasm-url "/wasm/manifold.wasm"})
+    (.then
+      (fn [_]
+        (m/with-disposal
+          (fn []
+            (let [shape (texture/geodesic-uv
+                          (m/sphere 5 64)
+                          :origin [0 0 5] :normal [0 0 1]
+                          :size [3 2] :pixel-size 0.2
+                          :depth-map [[0 0 0] [0 1 0] [0 0 0]]
+                          :depth-scale 0.2)]
+              (m/export-model shape "surface.glb"))))))
+    (.catch js/console.error))
+```
+
+For Node, pass the fresh loader and binary to `init!`:
+
+```clojure
+(require '[goog.object :as gobj])
+
+(m/init! {:factory (js/require "/absolute/path/to/target/wasm/manifold.cjs")
+          :wasm-binary ((gobj/get (js/require "node:fs") "readFileSync")
+                        "/absolute/path/to/target/wasm/manifold.wasm")})
+```
+
+The Emscripten loader stays **outside Closure compilation**. Every Manifold
+method/property accessed by the CLJS bindings uses a string-keyed boundary,
+so advanced property renaming cannot change the native ABI. Application code
+can use ordinary CLJS calls such as `(m/cube 2 3 4)`; direct calls on foreign
+JS handles should use `goog.object` or declared externs.
+
+### Ownership, I/O, and parity boundaries
+
+- Native handles own WASM memory. Call `(m/dispose! shape ...)` when finished,
+  or use synchronous `(m/with-disposal (fn [] ...))`. The scope releases its
+  created handles even on exceptions; return ordinary data/bytes, not handles
+  or promises. Inputs created outside the scope are never implicitly released.
+  Mesh snapshots, frames, scene maps, and byte arrays are JS-managed data.
+- Numeric grids and `Uint8Array`/`ArrayBuffer` depth images map synchronously.
+  Filename/URL depth inputs return a Promise. `text`, `load-image`,
+  `load-surface`, `ply-file-to-surface`, `import-mesh`, and `texture/export-glb`
+  always return promises. Keep source handles alive until async work finishes.
+  Font/image decoding uses the native implementations and cleans up temporary
+  files in WASM's private filesystem.
+  This change also fixes native PLY storage allocation and image color-channel
+  indexing; rebuild the Java JAR separately to apply those two fixes on the JVM.
+- `m/scene` and `m/export-scene` support the JVM animation data model.
+  `m/export-model` accepts a solid or scene. Export writes a file in Node,
+  downloads in a browser, or returns `Uint8Array` when the filename is `nil`.
+  Use `texture/export-glb` to embed a PNG/JPEG with UV-mapped geometry.
+- `export-mesh` supports GLB, binary STL, and geometry-only OBJ, with
+  `:format` available for in-memory output. GLB material options include
+  `:color`, `:alpha`, `:roughness`, `:metalness`, `:normal-idx`, `:color-idx`,
+  `:alpha-idx`, and `:uv-idx`; channel selectors exclude XYZ, as on the JVM.
+  Texture mapping's `:prop-index`, by contrast, includes XYZ.
+- `import-mesh` reads STL, triangulated geometry-only OBJ, and one static,
+  untransformed triangle primitive from GLB. UV/color/normal attributes are
+  retained and physical seams repaired. It rejects unsupported GLB scenes,
+  animation, and required extensions explicitly. 3MF/3DS and other Assimp
+  formats remain JVM-only; this is not complete Assimp format parity.
+- CLJS `bounds` returns `{:min [...] :max [...]}`, `to-polygons` returns
+  Clojure vectors, and `get-mesh`/`get-mesh-gl` return native JS Mesh snapshots.
+  Frames use radians; solid rotations use degrees, matching the JVM API.
+  Surface depth has the same geometric limits as native code: very large
+  offsets can fold or self-intersect; global self-intersection detection is
+  not provided.
 
 # Development
 
@@ -387,6 +584,74 @@ In addition to specifying a uniform color when exporting a manifold, color attri
 
 ## Texture coordinates
 
+### Threading a complete native model
+
+`m/model` promotes a Manifold into an immutable C++ `manifold::Model` that
+owns geometry, base colors, images, and ordered texture layers. The JVM and
+WASM bindings use the same native implementation, not a Clojure-side asset
+registry. Build it with ordinary `->`:
+
+```clojure
+(require '[clj-manifold3d.core :as m])
+
+(-> (m/sphere 12 128)
+    m/model
+    (m/color [0.65 0.7 0.68 1])
+    (m/texture "resources/images/american-flag-generated.png"
+               :origin [0 -9.6 7.2] :normal [0 -0.8 0.6]
+               :u-direction [1 0 0] :size [13.3 7] :pixel-size 0.18
+               :depth-map [[1 1] [1 1]] :depth-scale 0.65
+               :depth-boundary :step)
+    (m/rotate [0 0 15])
+    (m/export-model "flag-model.glb"))
+```
+
+On CLJS, await `m/init!` and load image bytes first: `m/texture` takes a
+`Uint8Array` or `ArrayBuffer`, making the modeling pipeline synchronous.
+On the JVM it accepts image bytes or a filename. `texture/bake` output can be
+passed directly as the image in either runtime. In CLJS use `m/with-disposal`
+around a completed build/export to release intermediate native handles.
+
+Another `(m/texture image ...placement...)` appends another independently
+mapped layer; `:opacity` controls source-over blending in linear color space.
+`:mapping :geodesic` is the default and requires `:origin` and physical `:size`.
+`:mapping :planar` instead accepts `:axes`, UV `:scale`, and `:offset`, and
+repeats the image. Depth accepts numeric grids or grayscale image bytes/files,
+including 16-bit PNG, with the existing `:fade` / `:step` boundary options.
+The mapper assigns fresh UV channels automatically, including the outside-patch
+mask. There is no vertex callback and no manual `:prop-index` to coordinate.
+
+Transforms, refinement, booleans, and compose/decompose retain appearance.
+Boolean cutter faces keep the cutter's own images, even when both operands
+were derived from the same original. Inputs are unchanged and native copies
+share immutable image storage. Bare operands are promoted automatically when
+combined with a Model; `m/texture` also promotes a bare input. `m/model-info`
+reports the retained layer, image, and surface counts. `m/color` on a Model
+sets the base color underneath its layers.
+
+`m/export-model` exports a self-contained GLB, or returns bytes with a `nil`
+filename. Solid colors and opaque textured regions use ordinary glTF materials
+in a single mesh, preserving the original UVs and source image resolution.
+This includes disjoint decals, opaque overlaps, and textured boolean operands;
+shared images are embedded once. There is no per-triangle rebaking on this path.
+
+When a visible layer needs alpha/opacity compositing, or its coverage boundary
+crosses a triangle, export conservatively falls back to the full-model render
+atlas. Standard glTF has no arbitrary ordered-layer shader. In-memory layers
+remain intact on both paths. `:tile-size` (2–256, default 16) controls samples
+per triangle edge **only for that fallback**; it does not downsample direct
+textures. The atlas is limited to 64 million pixels. GLB is a render output, not an editable Model
+round-trip format. JVM scene import/edit/export preserves its rendered appearance,
+but does not reconstruct its original ordered native Model layers. Textured Model
+nodes in animation scenes are supported on the JVM; CLJS scene appearance support
+and other Model export formats remain follow-ups. Hulls and plane cuts also need an explicit
+new-surface appearance policy before they can accept Model operands; perform
+those operations before texturing for now.
+
+See `examples/layered_model.clj` for two decals plus a textured boolean cutter.
+
+### Low-level UV channels
+
 On the JVM, UV coordinates can be attached as MeshGL vertex properties. Manifold
 interpolates those properties across newly created boolean faces, so apply the
 same property slot to every operand before combining them:
@@ -496,6 +761,67 @@ are in `examples/surface_sticker.clj`:
 (def models (sticker/models))
 (sticker/export! models)
 ```
+
+### Surface-normal depth
+
+Add `:depth-map` to the same surface-mapping call to emboss or engrave real
+geometry, not just shade a texture. It accepts a rectangular numeric grid or
+an image filename. Image decoding and displacement run natively:
+
+```clojure
+(def relief
+  (texture/geodesic-uv (m/sphere 10 96)
+    :origin [0 0 10] :normal [0 0 1] :u-direction [1 0 0]
+    :size [6 4] :pixel-size 0.1
+    :depth-map [[0 0 0]
+                [0 0.5 0]
+                [0 0 0]]
+    :depth-fade 0))
+```
+
+Depth is `sample * :depth-scale + :depth-offset`, in model units; the defaults
+are 1 and 0. On smooth surfaces, positive depth moves outward along the
+**local surface normal**; negative depth moves inward. Normals are interpolated
+from angle-weighted halfedge fans on the original surface, not from the fixed
+patch orientation.
+The input shape is immutable, and omitting depth retains UV-only behavior.
+
+Images are decoded as grayscale `[0,1]` (including 16-bit PNG precision, with
+alpha ignored). Use, for example, `:depth-map "height.png" :depth-scale 0.5`.
+Both grids and images run top-to-bottom and are bilinearly sampled over the
+whole local patch, independently of `:uv-rect`. `:pixel-size` still controls
+geometry resolution: a finer image alone does not add more surface samples.
+
+`:depth-boundary` selects `:fade` (default) or `:step`.
+With `:fade`, `:depth-fade` is a smooth transition back to zero at the patch
+edge, measured in model units. It defaults to twice `:pixel-size`, capped at
+half the patch size. Setting it to zero requires zero depth at every input
+boundary sample.
+
+`:step` retains the boundary depth and adds side walls with `:outside-uv`.
+For example, `:depth-map [[1 1] [1 1]] :depth-scale 0.3 :depth-boundary :step`
+creates a raised patch with a sharp edge; negative scale engraves a recess.
+Step mode defaults to zero fade and rejects a nonzero `:depth-fade`.
+Sign changes between stepped boundary vertices are rejected unless a vertex
+samples the zero crossing; use a fade for such maps.
+The surface outside the patch stays unchanged, and UV seams remain physically
+joined. UVs from both operands
+are preserved through subsequent booleans, including newly cut faces.
+
+Sharp planar corners automatically use a **mitered join**. The native halfedge
+graph identifies incident faces and solves a common direction whose dot product
+with each face normal is one. Depth is the normal distance from each original
+plane; tangential motion keeps the entire UV chart joined, without clipping the
+image. At an inner square corner, depth `d` moves the patch by `[d d d]`.
+Both signs, images, numeric grids, and fade/step boundaries work with this join.
+Patches crossing sharp creases currently require at most three planar face
+orientations. Inconsistent joins and miters longer than eight times depth are
+rejected; this is not a general offset of arbitrary sharp or curved junctions.
+
+Local triangle folds are rejected. Global self-intersections are not checked;
+choose depths small relative to local curvature, wall thickness, and nearby
+surfaces. Examples of raised, engraved, and image-driven torus and corner patches are in
+`examples/surface_depth.clj`.
 
 ## Compose
 
@@ -641,6 +967,195 @@ an animation-capable glTF viewer, or render a particular time with F3D:
 f3d --animation-time 0 pivot-arm.glb
 f3d --animation-time 1 pivot-arm.glb
 ```
+
+## JVM scene assembly and spatial queries
+
+`core/scene`, `core/export-scene`, and `core/export-model` accept scenes containing
+Manifolds or native Models. Each node retains its Model's colors, normals, UVs,
+and embedded images. Identical geometry/material pairs share a glTF mesh.
+Optional node `:material` overrides use `:color` (RGBA), `:roughness`, and
+`:metalness`. Transform-only pivots, node `:extras`, and animation clips survive
+export. Matrices are column-major; quaternions are `[x y z w]`.
+
+```clojure
+(require '[clj-manifold3d.core :as m]
+         '[clj-manifold3d.scene :as scene])
+
+(def assembly
+  (-> (m/import-scene "assembly.glb")
+      (scene/update-node "Arm" update :extras assoc "inspected" true)
+      ;; A parent offset retains the child's original animated transforms.
+      (scene/wrap-node "Arm" {:translation [10 0 0]})
+      (scene/append
+        (m/scene {:nodes [{:id :bracket :geometry (m/cube 2 3 4)}]}))))
+
+(m/export-model assembly "assembly-edited.glb")
+
+(def pose (scene/sample-scene assembly 0.5))
+(scene/bounds pose "Arm")
+(with-open [arm (scene/solid pose "Arm")
+            index (m/spatial-index arm)]
+  (m/ray-cast index [100 0 0] [-1 0 0])
+  (m/closest-point index [100 0 0])
+  (m/contains-point? index [0 0 0]))
+```
+
+Scene edits return new documents. `scene/node`/`update-node` use keyword keys at
+the node's top level; nested glTF fields and imported extras retain string keys.
+Selectors are integer indices or unique names; keywords also select default
+authored ID names. `remove-node` detaches a subtree without renumbering assets or
+compacting binary storage. `append` adds the other document's active roots and
+remaps all core asset references, retaining its animation clips as separate clips.
+
+`sample-scene` freezes a rigid pose, removes clips from the returned snapshot,
+and clamps time to each sampler's range. Select a clip with `:animation` (index or
+unique name); `nil` selects the rest pose. Imported LINEAR, STEP, and CUBICSPLINE
+TRS channels are supported. `world-transforms`, `vertices`, and `bounds` operate
+on the current pose. `solid` reconstructs each closed node mesh and unions the
+selected subtree; it extracts **geometry only**, leaving appearance in the scene.
+For repeated sampling, first call `scene/document` once to compile an authored
+scene, or use `import-scene`, which already returns a compiled document.
+
+Import/export supports embedded single-buffer GLB 2.0, preserving original assets
+and metadata. It does not load external buffers/images. Append supports core glTF,
+`KHR_materials_unlit`, and `KHR_texture_transform`; other source extensions are
+rejected because their index semantics need explicit remapping. Geometry queries
+require rigid, uncompressed triangle meshes; skinning, morph deformation and
+compressed primitives are not evaluated. These restrictions do not prevent
+unchanged assets from being retained in an imported/exported scene. Units are
+preserved, with no automatic mm/metre conversion.
+
+Native `spatial-index` owns a BVH snapshot independent of the source's lifetime.
+Queries also accept a Manifold or Model directly (building a temporary index).
+Ray hits return `:triangle`, `:distance`, `:position`, `:normal`, and `:barycentric`;
+closest-point results omit barycentrics. Both return nil for no result. Point
+containment includes boundaries by default; use `:boundary? false` to exclude
+them, or `spatial/classify-point` for `:inside`, `:boundary`, `:outside`.
+`overlap?` includes touching and complete containment, including disconnected
+shells and cavities. Its `:tolerance` is a contact-axis tolerance, not an exact
+clearance distance or a guarantee of positive-volume intersection. Tolerance
+defaults to `1e-7` model units; choose appropriately for your model's scale.
+
+`m/mesh-merge` returns a copy repaired by native `MeshGL.Merge`, without changing
+the input or its vertex properties. This is best effort, not general mesh repair:
+check `(m/status (m/manifold merged))` for `:NoError`.
+
+All additions in this section are JVM implementations. Scene data and functional
+APIs are designed for a subsequent CLJS port; no CLJS parity is claimed yet.
+They require the freshly rebuilt sibling Java bindings, already selected by
+the development/test aliases. Rebuild with a full JDK (including JNI headers):
+
+```sh
+cd ../manifold/bindings/java
+mvn -Dmaven.test.skip=true package
+```
+
+The skip flag bypasses the binding project's stale Java test sources; the native
+queries are exercised through the Clojure integration tests. Already-running JVMs
+keep loaded native classes: use a fresh JVM for the new bindings, without stopping
+an existing REPL session. Run the working assembly example with:
+
+```sh
+clojure -M:clj-dev -m scene-assembly target/scene-assembly.glb
+```
+
+The example reports no interference at times 0 and 0.5, and interference at 1.
+The GLB remains animated and keeps the colored materials.
+
+# Modeling Journal
+
+This separate, Maria-inspired notebook interleaves editable rich prose, code,
+and inline results. Solids and native Models render as orbitable, downloadable
+GLBs; scenes play their animations; cross-sections render as flat SVGs. It has
+its own builds, assets, worker and server, independent of Try it!.
+
+Build and host it locally with:
+
+```sh
+npm run build:journal
+npm run serve:journal
+```
+
+Open http://localhost:8090/journal/. `JOURNAL_PORT` and `JOURNAL_DATA` override
+the port and database directory. `npm run test:journal` checks the advanced
+build in Chromium with an isolated temporary Datahike database.
+`npm run test:journal:state` verifies DataScript subscriptions and the shared
+`.cljc` document/schema tests under advanced optimization.
+
+- Ctrl/Cmd+Enter evaluates the selection or form at the cursor;
+  Ctrl/Cmd+Shift+E evaluates the enclosing top-level form.
+  Ctrl/Cmd+Shift+Enter splits the code block at the exact cursor position and
+  focuses the new block. Shift+Enter runs the block; Ctrl/Cmd+Alt+Enter
+  runs the page from scratch. Results stay beside the code that produced them.
+- Prose supports headings, bold, italic, code, lists and Markdown shortcuts.
+  Insert, reorder or remove blocks without editing a special file syntax.
+- CodeMirror provides highlighting, automatic brackets, optional Vim bindings,
+  and parser-based forward/backward slurp and barf, with automatic reindentation
+  in the same undo step. In Vim visual mode, `>` barfs and `<` slurps forwards.
+  F1 opens the shortcut guide;
+  actions show their shortcuts on hover.
+- Split panes show independently scrollable documents. Opening the same
+  document twice synchronizes edits and results without replacing editors.
+
+All application facts live in DataScript: documents and blocks, layout, focus,
+preferences, dialog drafts, save acknowledgements, pending evaluations and
+results (including viewer display toggles). UI subscriptions run Datalog
+queries and notify only when their result changes. Atoms outside the database
+hold disposable resources: editors, renderers, workers, timers, promise chains
+and subscription caches. Editor-internal cursor/undo machinery and camera/GPU
+internals remain owned by their respective components. Worker evaluation
+history also lives in DataScript; SCI contexts and native allocations are
+runtime resources, not serializable application records.
+
+The Clojure backend persists documents, blocks, and workspace preferences in
+Datahike using the shared `journal.schema` vocabulary. Datahike is the source
+of truth; saves also materialize readable `.clj` namespaces under
+`data/journal/documents/` (e.g. `workshop.my-part` → `workshop/my_part.clj`).
+Prose becomes ordinary Clojure comments. Files are repaired from the database
+at startup; external file edits are not imported. Save revisions reject
+conflicting writes instead of silently overwriting another window's work.
+
+Evaluation currently runs in browser SCI with real WASM geometry, **not on the
+JVM server** and not through a full ClojureScript compiler. Documents can
+`require` other documents; code blocks share a namespace session. Changed code
+or dependencies invalidate it at the next evaluation. Stop/30-second timeout
+restarts the worker. JVM/JS interop and arbitrary dependency loading are not
+exposed. The server binds to loopback and does not execute submitted code.
+Original prototype databases/files under `data/maria-*` are left untouched.
+The replaced prototype source is archived in
+`target/journal-prototype-before-replacement.tar` for recovery.
+
+#### Prompting Codex from prose
+
+Write a request in any prose block, then choose **Prompt Codex** or press
+Ctrl/Cmd+Enter while editing that prose. A Thinking panel appears immediately
+underneath it. When the response completes, editable prose/code panels are
+inserted below the Thinking panel. Generated code is **not automatically run**;
+review it and use the normal Run action to render its result.
+
+This uses the local, signed-in Codex CLI (`codex login`). The prose prompt and
+preceding code/prose in that document are sent to Codex; unrelated documents
+and later blocks are not included. The CLI runs with a read-only sandbox,
+no shell, no web search, no subagents, and no user-configured app integrations.
+The frontend never receives credentials. This is a local trusted-user app,
+not an authenticated multi-user hosting service.
+
+Thinking shows public progress updates, **not private chain-of-thought**.
+Raw reasoning events are discarded. Requests, progress, prompt snapshots and
+structured outputs are stored in Datahike and mirrored in DataScript; only
+process handles, polling timers and executors are runtime resources. Requests
+survive a browser refresh, completion is applied at most once, and generated
+blocks use the normal document-save and namespace-file workflow. Stop Codex
+cancels the subprocess. A server restart marks unfinished requests interrupted
+rather than silently rerunning a paid request. At most two requests run at a
+time, with a five-minute timeout.
+
+`JOURNAL_CODEX_BIN` selects the CLI executable and `JOURNAL_CODEX_MODEL` optionally
+selects a model; otherwise the CLI default is used. User CLI configuration is
+not loaded, but existing CLI authentication is reused. `npm run test:journal`
+uses an explicit deterministic subprocess fixture, never your Codex account.
+See [Codex non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode)
+for the JSON event stream and structured-output protocol used here.
 
 # Example Projects
 

@@ -25,7 +25,7 @@
                        (-> deps-data :aliases :clj-prod :extra-deps))]
     (jar/jar 'org.clojars.cartesiantheatrics/clj-manifold3d {:mvn/version version}
              {:out-path                (format "target/clj-manifold3d-%s.jar" version)
-              :paths                   ["src/clj" "src/cljc"]
+              :paths                   ["src/clj" "src/cljc" "src/cljs"]
               :deps                    deps
               :mvn/repos               '{"clojars" {:url "https://repo.clojars.org/"}}
               :exclusion-predicate     jar/default-exclusion-predicate

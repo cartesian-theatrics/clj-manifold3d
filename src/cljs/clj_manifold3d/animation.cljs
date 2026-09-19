@@ -1,16 +1,10 @@
 (ns clj-manifold3d.animation
-  "JVM rigid animation tracks, scene graphs, and a glTF/GLB scene exporter.
-
-  Geometry is authored in local coordinates; node transforms and animation
-  tracks are written separately."
-  (:require [clj-manifold3d.model :as model]
-            [clj-manifold3d.glb :as glb])
-  (:import [java.nio ByteBuffer ByteOrder]
-           [manifold3d Manifold]
-           [manifold3d.linalg DoubleVec3]))
+  "Immutable animation tracks and GLB scenes for ClojureScript."
+  (:require [clj-manifold3d.runtime :as rt]
+            [clj-manifold3d.glb :as glb]))
 
 (defn- finite-number? [x]
-  (and (number? x) (Double/isFinite (double x))))
+  (and (number? x) (js/Number.isFinite x)))
 
 (defn- assert-vector! [name value n]
   (when-not (and (vector? value)
@@ -24,8 +18,6 @@
     (throw (ex-info ":time must be finite" {:frame frame})))
   (assert-vector! ":translation" translation 3)
   (assert-vector! ":rotation" rotation 4)
-  (when (< (reduce + (map #(* % %) rotation)) 1.0e-24)
-    (throw (ex-info "Quaternion must have non-zero length" {:frame frame})))
   (assert-vector! ":scale" scale 3)
   frame)
 
@@ -57,7 +49,7 @@
   (reduce + (map * a b)))
 
 (defn- normalize4 [q]
-  (let [length (Math/sqrt (dot4 q q))]
+  (let [length (js/Math.sqrt (dot4 q q))]
     (when (< length 1.0e-12)
       (throw (ex-info "Quaternion must have non-zero length" {:rotation q})))
     (mapv #(/ (double %) length) q)))
@@ -69,10 +61,10 @@
         [b cosine] (if (neg? cosine) [(mapv - b0) (- cosine)] [b0 cosine])]
     (if (> cosine 0.9995)
       (normalize4 (lerp-vector a b u))
-      (let [theta (Math/acos (max -1.0 (min 1.0 cosine)))
-            sin-theta (Math/sin theta)
-            wa (/ (Math/sin (* (- 1.0 u) theta)) sin-theta)
-            wb (/ (Math/sin (* u theta)) sin-theta)]
+      (let [theta (js/Math.acos (max -1.0 (min 1.0 cosine)))
+            sin-theta (js/Math.sin theta)
+            wa (/ (js/Math.sin (* (- 1.0 u) theta)) sin-theta)
+            wb (/ (js/Math.sin (* u theta)) sin-theta)]
         (normalize4 (mapv #(+ (* wa %1) (* wb %2)) a b))))))
 
 (defn- bracket [frames time]
@@ -110,23 +102,19 @@
 (defn scene?
   "Return true when `value` is a validated animation scene."
   [value]
-  (or (= scene-type (:model/type value)) (glb/document? value)))
+  (= scene-type (:model/type value)))
 
 (defn- normalize-node [index node]
   (let [id (or (:id node) (:name node))
         children (vec (or (:children node) []))
-        transform (merge (select-keys node [:translation :rotation :scale :matrix])
+        transform (merge (select-keys node [:translation :rotation :scale])
                          (:transform node))]
     (when-not (some? id)
       (throw (ex-info "Scene nodes require an :id" {:index index :node node})))
     (doseq [[key size] [[:translation 3] [:rotation 4] [:scale 3]]]
       (when (contains? transform key)
         (assert-vector! (str ":transform/" (name key)) (get transform key) size)))
-    (when-let [matrix (:matrix transform)]
-      (assert-vector! ":transform/matrix" matrix 16)
-      (when (some #(contains? transform %) [:translation :rotation :scale])
-        (throw (ex-info "Use matrix or TRS, not both" {:node id}))))
-    (assoc (select-keys node [:name :geometry :material :extras])
+    (assoc (select-keys node [:name :geometry :extras])
            :id id
            :children children
            :transform transform)))
@@ -148,8 +136,6 @@
     (when-not (contains? #{:translation :rotation :scale} path)
       (throw (ex-info "Animation channel path must be :translation, :rotation, or :scale"
                       {:path path})))
-    (when-not (#{"LINEAR" "STEP"} (or (:interpolation channel) "LINEAR"))
-      (throw (ex-info "Authored channels support LINEAR or STEP" {:channel channel})))
     {:node node
      :path path
      :track (keyframes (:track channel))
@@ -186,17 +172,6 @@
                       {:children (vec (remove node-ids child-ids))})))
     (when (cycle? children-by-id)
       (throw (ex-info "Scene node hierarchy cannot contain cycles" {})))
-    (when (some #(> % 1) (vals (frequencies (mapcat :children nodes))))
-      (throw (ex-info "Scene nodes may have only one parent" {})))
-    (doseq [animation animations]
-      (let [targets (map (juxt :node :path) (:channels animation))]
-        (when-not (= (count targets) (count (set targets)))
-          (throw (ex-info "A clip cannot target a node path twice" {:targets targets}))))
-      (doseq [channel (:channels animation)]
-        (when (:matrix (:transform (first (filter #(= (:id %) (:node channel)) nodes))))
-          (throw (ex-info "Animated nodes must use TRS, not matrix" {:node (:node channel)})))
-        (when (some #(neg? (:time %)) (:track channel))
-          (throw (ex-info "glTF animation times must be nonnegative" {:channel channel})))))
     {:model/type scene-type
      :name (or name "Scene")
      :nodes nodes
@@ -204,44 +179,31 @@
      :animations (mapv #(normalize-animation node-ids %) (or animations []))
      :extras extras}))
 
-(defn- align4 [n]
-  (+ n (mod (- 4 (mod n 4)) 4)))
 
-(defn- floats->bytes [values]
-  (let [buffer (doto (ByteBuffer/allocate (* 4 (count values)))
-                 (.order ByteOrder/LITTLE_ENDIAN))]
-    (doseq [value values]
-      (.putFloat buffer (float value)))
-    (.array buffer)))
+(def ^:private align4 glb/align4)
+(def ^:private floats->bytes glb/floats->bytes)
+(def ^:private ints->bytes glb/ints->bytes)
+(def ^:private mesh-data glb/mesh-data)
+(def ^:private empty-glb-state glb/empty-state)
+(def ^:private add-segment glb/add-segment)
+(def ^:private add-accessor glb/add-accessor)
 
-(defn- empty-glb-state []
-  {:segments [] :views [] :accessors [] :length 0})
-
-(defn- add-segment [state bytes target]
-  (let [offset (align4 (:length state))
-        padding (- offset (:length state))
-        view (cond-> {"buffer" 0
-                      "byteOffset" offset
-                      "byteLength" (alength bytes)}
-               target (assoc "target" target))]
-    [(-> state
-         (update :segments into (concat [(byte-array padding)] [bytes]))
-         (update :views conj view)
-         (assoc :length (+ offset (alength bytes))))
-     (dec (count (conj (:views state) view)))]))
-
-(defn- add-accessor [state buffer-view component-type value-count type minimum maximum]
-  (let [accessor (cond-> {"bufferView" buffer-view
-                          "componentType" component-type
-                          "count" value-count
-                          "type" type}
-                   minimum (assoc "min" minimum)
-                   maximum (assoc "max" maximum))]
-    [(update state :accessors conj accessor)
-     (dec (count (conj (:accessors state) accessor)))]))
+(defn- add-geometry [state geometry]
+  (let [{:keys [positions indices min max]} geometry
+        [state position-view] (add-segment state (floats->bytes positions) 34962)
+        [state position-accessor] (add-accessor state position-view 5126
+                                                 (/ (count positions) 3) "VEC3"
+                                                 min max)
+        [state index-view] (add-segment state (ints->bytes indices) 34963)
+        [state index-accessor] (add-accessor state index-view 5125
+                                              (count indices) "SCALAR" nil nil)]
+    [state {"primitives"
+            [{"attributes" {"POSITION" position-accessor}
+              "indices" index-accessor
+              "mode" 4}]}]))
 
 (defn- channel-values [path track]
-  (vec (mapcat (if (= path :rotation) #(normalize4 (:rotation %)) path) track)))
+  (vec (mapcat path track)))
 
 (defn- channel-type [path]
   (case path
@@ -288,9 +250,8 @@
       (:translation transform) (assoc "translation"
                                       (mapv double (:translation transform)))
       (:rotation transform) (assoc "rotation"
-                                   (normalize4 (:rotation transform)))
+                                   (mapv double (:rotation transform)))
       (:scale transform) (assoc "scale" (mapv double (:scale transform)))
-      (:matrix transform) (assoc "matrix" (:matrix transform))
       extras (assoc "extras" extras))))
 
 (defn- scene->gltf [scene]
@@ -300,27 +261,38 @@
   (let [nodes (:nodes scene)]
     (when (empty? nodes)
       (throw (ex-info "An animation scene requires at least one node" {})))
-    (let [node-indices (into {} (map-indexed (fn [index node]
+    (let [[state meshes mesh-indices]
+          (reduce (fn [[state meshes mesh-indices] node]
+                    (if-let [geometry (:geometry node)]
+                      (let [[state mesh] (add-geometry state (mesh-data geometry))
+                            mesh-index (count meshes)]
+                        [state
+                         (conj meshes mesh)
+                         (assoc mesh-indices (:id node) mesh-index)])
+                      [state meshes mesh-indices]))
+                  [(empty-glb-state) [] {}]
+                  nodes)
+          node-indices (into {} (map-indexed (fn [index node]
                                                [(:id node) index])
                                              nodes))
           gltf-nodes (mapv (fn [node]
-                             (node-transform node nil
+                             (node-transform node (get mesh-indices (:id node))
                                              node-indices))
                            nodes)
           [state animations]
           (reduce (fn [[state animations] animation]
                     (let [[state animation] (add-animation state animation node-indices)]
                       [state (conj animations animation)]))
-                  [(empty-glb-state) []]
+                  [state []]
                   (:animations scene))
           bin-length (align4 (:length state))
           gltf (cond-> {"asset" {"version" "2.0"
                                   "generator" "clj-manifold3d.animation"}
                         "scene" 0
-                        "scenes" [(cond-> {"name" (:name scene)
-                                           "nodes" (mapv node-indices (:roots scene))}
-                                    (:extras scene) (assoc "extras" (:extras scene)))]
+                        "scenes" [{"name" (:name scene)
+                                   "nodes" (mapv node-indices (:roots scene))}]
                         "nodes" gltf-nodes
+                        "meshes" meshes
                         "buffers" [{"byteLength" bin-length}]
                         "bufferViews" (:views state)
                         "accessors" (:accessors state)}
@@ -329,65 +301,17 @@
        :segments (:segments state)
        :bin-length bin-length})))
 
-(defn- join-segments [segments length]
-  (let [output (byte-array length)]
-    (loop [offset 0
-           segments segments]
-      (when-let [segment (first segments)]
-        (System/arraycopy segment 0 output offset (alength segment))
-        (recur (+ offset (alength segment)) (next segments))))
-    output))
 
-(defn- appearance-assets [geometry material]
-  (when material
-    (when-not (and (map? material) (every? #{:color :roughness :metalness} (keys material)))
-      (throw (ex-info "Scene material supports :color, :roughness and :metalness" {:material material})))
-    (when-let [color (:color material)] (assert-vector! ":material/color" color 4))
-    (doseq [x (concat (:color material) (vals (select-keys material [:roughness :metalness])))]
-      (when-not (and (finite-number? x) (<= 0 x 1))
-        (throw (ex-info "Material components must be finite and in [0,1]" {:material material})))))
-  (let [asset (glb/read-glb (model/export-model (model/model geometry) nil))
-        asset (-> asset (assoc-in [:gltf "nodes"] [])
-                  (assoc-in [:gltf "scenes"] [{"nodes" []}]))]
-    (if material
-      (update-in asset [:gltf "materials"]
-                 (fn [materials]
-                   (mapv #(cond-> (update % "pbrMetallicRoughness" merge
-                                          (cond-> {}
-                                            (:color material) (assoc "baseColorFactor" (:color material))
-                                            (contains? material :roughness) (assoc "roughnessFactor" (:roughness material))
-                                            (contains? material :metalness) (assoc "metallicFactor" (:metalness material))))
-                            (and (:color material) (< (nth (:color material) 3) 1)) (assoc "alphaMode" "BLEND")) materials)))
-      asset)))
-
-(defn scene-document
-  "Compile a scene to an immutable GLB document, sharing repeated geometry.
-  Each node's Model owns its colors, UVs, normals, and embedded images."
-  [value]
-  (if (glb/document? value) value
-    (let [value (scene value)
-          {:keys [gltf segments bin-length]} (scene->gltf value)
-          base (glb/document gltf (join-segments segments bin-length))]
-      (first
-       (reduce (fn [[doc cache] [index {:keys [geometry material]}]]
-                 (if-not geometry [doc cache]
-                   (let [key [geometry material]
-                         cached (get cache key)
-                         mesh-index (or cached (count (get-in doc [:gltf "meshes"])))
-                         doc (if cached doc (glb/append-document doc (appearance-assets geometry material)))]
-                     [(assoc-in doc [:gltf "nodes" index "mesh"] mesh-index)
-                      (assoc cache key mesh-index)])))
-               [base {}] (map-indexed vector (:nodes value)))))))
+(defn scene-bytes
+  "Encode a scene as a self-contained GLB Uint8Array."
+  [scene]
+  (let [{:keys [gltf segments bin-length]} (scene->gltf scene)]
+    (glb/encode gltf segments bin-length)))
 
 (defn export-scene
-  "Export a validated scene to a binary glTF 2.0 file.
-
-  `scene` may be created with `scene`, and `filename` is returned after the
-  file is written. Static nodes can contain geometry; transform-only nodes
-  can be used as parents or pivots. Animation channels target node IDs and
-  emit glTF translation, rotation, or scale samplers."
+  "Write/download GLB; pass nil as filename to return bytes."
   [scene filename]
-  (glb/write-glb (scene-document scene) filename))
+  (rt/write-bytes! filename (scene-bytes scene)))
 
 (defn pivot-arm-scene
   "Create a simple base-and-arm scene whose arm pivots around the origin.
@@ -402,8 +326,7 @@
           thickness 5.0
           base-radius 7.0
           base-height 5.0}}]
-   (let [arm (with-open [size (DoubleVec3. length width thickness)]
-               (Manifold/Cube size true))
+   (let [arm (rt/static "Manifold" "cube" #js [length width thickness] true)
          pivot-track (keyframes
                       [{:time 0.0
                         :translation [0.0 0.0 0.0]
@@ -421,7 +344,7 @@
       {:name "Pivot Arm"
        :nodes [{:id :base
                 :name "Base"
-                :geometry (Manifold/Cylinder base-height base-radius base-radius 32 true)}
+                :geometry (rt/static "Manifold" "cylinder" base-height base-radius base-radius 32 true)}
                {:id :arm-pivot
                 :name "Arm Pivot"
                 :children [:arm]}
@@ -439,4 +362,4 @@
   ([filename]
    (write-pivot-arm-glb filename {}))
   ([filename options]
-   (export-scene (pivot-arm-scene options) filename)))
+   (rt/with-disposal #(export-scene (pivot-arm-scene options) filename))))
