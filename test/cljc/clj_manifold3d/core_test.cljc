@@ -6,7 +6,7 @@
                                 compose decompose translate get-mesh-gl get-mesh import-mesh loft
                                 difference smooth sphere refine cylinder polyhedron export-mesh
                                 tetrahedron circle frame rotate square get-vertices
-                                get-halfedges get-edges]]))
+                                get-halfedges get-edges simplify to-polygons area]]))
 
 (deftest test-get-edges
   (let [c (cube 10 10 10 true)
@@ -74,7 +74,7 @@
                             [2 3 7 6]
                             [3 0 4 7]])
         v (cube 5 5 5 false)]
-    (is (= 12 (-> hedron get-mesh .triVerts .size)))
+    (is (= 12 (-> hedron get-mesh .NumTri)))
     (is (about= (:volume (get-properties hedron))
                 (:volume (get-properties v))))
     (is (about= (:surface-area (get-properties hedron))
@@ -83,8 +83,8 @@
 (deftest test-tetrahedron
   (let [tetra (tetrahedron)
         m (get-mesh tetra)]
-    (is (= (-> m .triVerts .size) 4))
-    (about= 2.66 (-> tetra get-properties :volume))))
+    (is (= (-> m .NumTri) 4))
+    (is (about= 2.66 (-> tetra get-properties :volume)))))
 
 (deftest test-cube
   (let [c (cube 10 10 10 false)
@@ -103,9 +103,9 @@
 (deftest test-mirror
   (let [c (cube 10 10 10 false)
         m (mirror c [0 1 0])
-        verts (.vertPos (get-mesh m))]
-    (doseq [i (range (.size verts))]
-      (is (not (pos? (.y (.get verts i))))))))
+        verts (get-vertices m)]
+    (doseq [[_ y _] verts]
+      (is (not (pos? y))))))
 
 (deftest test-smooth-refine
   (let [tet (tetrahedron)
@@ -114,8 +114,14 @@
                      (smooth)
                      (refine 100))
         props (get-properties smoothed)]
-    (is (about= (:volume props) 17.38 0.1))
-    (is (about= (:surface-area props) 33.38 0.1 ))))
+    ;; Measured with both the pre-upgrade fork and Manifold 3.5.3.
+    (is (about= (:volume props) 16.97046 0.001))
+    (is (about= (:surface-area props) 32.90618 0.001))))
+
+(deftest simplify-keeps-polygon-conversion
+  (let [polygons (to-polygons (square 3 4))]
+    (is (about= 12 (area (simplify polygons))))
+    (is (about= 12 (area (simplify (.get polygons 0) 0.001))))))
 
 (deftest test-compose
   (let [man (compose [(scale (tetrahedron) [5 5 5])
@@ -137,8 +143,8 @@
 (deftest test-get-mesh-gl
   (let [w 20
         m (cube w w w)
-        test-file-name  "test/data/cube-gl-mesh.glb"
-        mesh (get-mesh-gl m [0 1 2])
+        test-file-name (.getPath (java.io.File/createTempFile "manifold-mesh-" ".glb"))
+        mesh (get-mesh-gl m -1)
         _  (get-mesh-gl m)]
     (try
       (export-mesh mesh test-file-name)

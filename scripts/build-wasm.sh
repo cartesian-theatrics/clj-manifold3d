@@ -6,7 +6,7 @@ manifold_dir="${MANIFOLD_SOURCE:-${repo_dir}/../manifold}"
 build_dir="${MANIFOLD_WASM_BUILD:-${manifold_dir}/build-cljs}"
 options=()
 # Reuse downloaded source dependencies, never native object files.
-for dependency in clipper2 texttopolygon freetype2; do
+for dependency in texttopolygon freetype2; do
   source_dir="${manifold_dir}/build/_deps/${dependency}-src"
   if [[ -d "$source_dir" ]]; then
     options+=("-DFETCHCONTENT_SOURCE_DIR_${dependency^^}=${source_dir}")

@@ -171,3 +171,108 @@
     (is (rt/call @handle "isDeleted"))
     (m/dispose! @handle)))
 )
+
+(deftest upstream-minkowski-and-solid-simplification
+  (let [a (m/cube [2 2 2] true) b (m/cube [1 1 1] true)]
+    (is (close? 27 (volume (m/minkowski-sum a b))))
+    (is (close? 1 (volume (m/minkowski-difference a b))))
+    (is (close? 8 (volume a)))
+    (let [refined (m/refine a 4) simple (m/simplify refined 0.001)]
+      (is (close? 8 (volume simple)))
+      (is (< (support/triangle-count simple) (support/triangle-count refined))))
+    (is (close? 8 (volume (m/simplify (m/model (m/color a [1 0 0 1])) 0.001))))
+    (is (thrown? #?(:clj Exception :cljs js/Error) (m/minkowski-sum (m/model a) b)))
+    (is (thrown? #?(:clj Exception :cljs js/Error) (m/simplify a -1)))))
+
+(deftest upstream-tolerance-refinement-and-properties
+  (let [a (m/sphere 2 16) tol (m/set-tolerance a 0.01)
+        normals (m/calculate-normals a)
+        smooth (m/smooth-by-normals normals)
+        refined (m/refine-to-tolerance smooth 0.05)
+        curvature (m/calculate-curvature a 0 1)]
+    (is (close? 0.01 (m/get-tolerance tol)))
+    (is (< (m/get-tolerance a) 0.01))
+    (is (= :NoError (m/status refined)))
+    (is (> (support/triangle-count refined) (support/triangle-count a)))
+    (is (= 5 (support/mesh-field (m/get-mesh curvature) "numProp")))
+    (is (every? support/finite? (mapcat #(drop 3 %) (support/rows curvature))))
+    (is (thrown? #?(:clj Exception :cljs js/Error) (m/refine-to-tolerance a 0)))))
+
+(deftest upstream-bevel-and-gap
+  (let [a (m/cube 1 1 1) b (m/translate a [3 0 0])]
+    (is (close? 2 (m/min-gap a b 5)))
+    (is (close? 1 (m/min-gap a b 1)))
+    (is (close? 0 (m/min-gap a a 5)))
+    (is (close? 2 (m/min-gap (m/model a) (m/model b) 5)))
+    (is (close? 8.5 (m/area (m/offset (m/square 2 2) 0.5 :bevel))))))
+
+(deftest upstream-segment-rays-retain-old-ray-api
+  (let [a (m/cube 2 2 2)
+        hits (m/ray-cast-segment a [-1 0.6 0.7] [3 0.6 0.7])]
+    (is (= 2 (count hits)))
+    (is (every? true? (map close? [0.25 0.75] (map :distance hits))))
+    (is (support/numeric= [[0 0.6 0.7] [2 0.6 0.7]] (mapv :position hits)))
+    (is (every? #(and (integer? (:face-id %)) (= 3 (count (:normal %)))) hits))
+    (is (empty? (m/ray-cast-segment a [-1 3 3] [3 3 3])))
+    (is (close? 1 (:distance (m/ray-cast a [-1 0.6 0.7] [1 0 0]))))))
+
+(deftest upstream-context-cancellation-is-explicit-and-immutable
+  (let [a (m/cube 2 2 2) context (m/execution-context)]
+    (is (false? (m/cancelled? context)))
+    (is (<= 0 (m/progress context) 1))
+    (is (identical? context (m/cancel! context)))
+    (is (m/cancelled? context))
+    (is (= :Cancelled (m/status (m/refine (m/with-context a context) 2))))
+    (is (= :Cancelled (m/status (m/manifold (m/get-mesh a) context))))
+    (is (= :Cancelled (m/status (m/smooth (m/get-mesh a) [] context))))
+    (is (= :NoError (m/status a)))
+    (is (close? 8 (volume a)))
+    (let [fresh (m/execution-context)]
+      (is (= :NoError (m/status (m/manifold (m/get-mesh a) fresh))))
+      (is (= :NoError (m/status (m/refine (m/with-context a fresh) 2))))
+      (is (close? 1 (m/progress fresh))))))
+
+(deftest upstream-obj-is-a-geometry-only-round-trip
+  (let [a (m/color (m/cube [2 3 4]) [0.1 0.3 0.7 1])
+        encoded (m/write-obj-string a) b (m/read-obj-string encoded)]
+    (is (string? encoded))
+    (is (= :NoError (m/status b)))
+    (is (close? 24 (volume b)))
+    (is (support/numeric= (support/bounds a) (support/bounds b)))
+    (is (= 3 (support/mesh-field (m/get-mesh b) "numProp")))
+    (is (= (sort (map #(vec (take 3 %)) (support/rows a))) (sort (support/rows b))))))
+
+(deftest upstream-level-set-and-context-factories
+  (let [box {:min [-1.5 -1.5 -1.5] :max [1.5 1.5 1.5]}
+        sdf (fn [[x y z]] (- 1 (+ (* x x) (* y y) (* z z))))
+        a (m/level-set sdf box 0.2)
+        b (m/level-set sdf box 0.2 :context (m/execution-context))]
+    (is (= :NoError (m/status a)))
+    (is (< 3.8 (volume a) 4.3))
+    (is (close? (volume a) (volume b)))
+    (is (= :Cancelled (m/status (m/level-set sdf box 0.2 :context (m/cancel! (m/execution-context))))))
+    (is (thrown? #?(:clj Exception :cljs js/Error)
+                 (m/level-set (fn [_] (throw (ex-info "SDF callback error" {}))) box 1)))
+    (is (thrown? #?(:clj Exception :cljs js/Error) (m/level-set sdf box 0)))))
+
+(deftest upstream-mesh-run-flags-and-portable-data
+  (let [a (m/calculate-normals (m/cube 2 3 4))
+        mesh (m/get-mesh a) data (m/mesh-data mesh)
+        clone (apply m/mesh (mapcat identity data)) b (m/manifold clone)]
+    (is (seq (:run-flags data)))
+    (is (every? :has-normals? (m/mesh-run-info mesh)))
+    (is (= data (m/mesh-data clone)))
+    (is (= :NoError (m/status b)))
+    (is (close? 24 (volume b)))
+    (is (every? :has-normals? (m/mesh-run-info (m/get-mesh b))))))
+
+(deftest upstream-mesh-data-keeps-unsigned-identifiers
+  ;; Copy arbitrary metadata without constructing a solid: these values exercise
+  ;; the full uint32/uint8 representation across JNI and JS typed arrays.
+  (let [mesh (m/mesh :run-original-id [2147483649] :face-id [4294967295]
+                     :run-flags [255] :tolerance 0.125)
+        data (m/mesh-data mesh)]
+    (is (= [2147483649] (:run-original-id data)))
+    (is (= [4294967295] (:face-id data)))
+    (is (= [255] (:run-flags data)))
+    (is (= data (m/mesh-data (apply m/mesh (mapcat identity data)))))))

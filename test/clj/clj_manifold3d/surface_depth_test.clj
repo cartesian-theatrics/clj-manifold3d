@@ -33,7 +33,15 @@
             (is (close? x (- (* 3 u) 1.5)))
             (is (close? y (- 1 (* 2 v))))
             (is (close? z (+ 1 (* sign 0.4 (tent u) (tent v)))))))
-        (is (every? #(or (close? -1 (nth % 2)) (close? 1 (nth % 2)))
+        ;; Refinement may subdivide the original side walls as well as the
+        ;; top/bottom. Unmapped vertices must remain on the original box.
+        (is (every? (fn [[x y z]]
+                      (and (<= (Math/abs x) 5.000002)
+                           (<= (Math/abs y) 5.000002)
+                           (<= (Math/abs z) 1.000002)
+                           (or (close? 5 (Math/abs x))
+                               (close? 5 (Math/abs y))
+                               (close? 1 (Math/abs z)))))
                     (filter #(neg? (nth % 3)) (rows result))))))
     (is (close? 200 (.volume source)) "Mapping leaves its input unchanged")))
 

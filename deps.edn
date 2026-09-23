@@ -8,6 +8,10 @@
   {:extra-paths ["test/shared"]
    :main-opts ["scripts/shared-tests.clj"]}
 
+  :test-regressions
+  {:extra-paths ["test/clj"]
+   :main-opts ["scripts/jvm-regression-tests.clj"]}
+
   :cljs-prod
   {:extra-paths ["src/cljs"]}
 

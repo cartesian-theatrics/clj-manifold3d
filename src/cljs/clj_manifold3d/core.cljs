@@ -1,7 +1,8 @@
 (ns clj-manifold3d.core
   "Synchronous, immutable modeling on fresh Manifold WASM bindings.
   Await init! once. Explicitly dispose! owned WASM handles when finished."
-  (:require [clj-manifold3d.runtime :as rt]
+  (:require [clj-manifold3d.upstream :as upstream]
+            [clj-manifold3d.runtime :as rt]
             [clj-manifold3d.animation :as animation]
             [clj-manifold3d.mesh-io :as mesh-io]
             [clj-manifold3d.model :as native-model]
@@ -59,10 +60,10 @@
   (to-array xs))
 
 (defn mesh
-  "Create an owned JS MeshGL snapshot; metadata uses the native camelCase names."
+  "Create an owned MeshGL snapshot from keyword options; mesh-data copies it back to portable data."
   [& {:keys [tri-verts vert-pos vert-properties num-prop merge-from-vert merge-to-vert
-              run-index run-original-id run-transform face-id halfedge-tangent]
-       :or {num-prop 3}}]
+              run-index run-original-id run-transform run-flags face-id halfedge-tangent tolerance]
+       :or {num-prop 3 tolerance 0}}]
   (let [options (js-obj "numProp" num-prop
                         "triVerts" (js/Uint32Array. (clj->js (mapcat identity tri-verts)))
                         "vertProperties" (js/Float32Array. (clj->js (or vert-properties (mapcat identity vert-pos)))))]
@@ -71,11 +72,14 @@
       (when value (gobj/set options key (js/Uint32Array. (clj->js value)))))
     (doseq [[key value] [["runTransform" run-transform] ["halfedgeTangent" halfedge-tangent]]]
       (when value (gobj/set options key (js/Float32Array. (clj->js value)))))
+    (when run-flags (gobj/set options "runFlags" (js/Uint8Array. (clj->js run-flags))))
+    (gobj/set options "tolerance" tolerance)
     (rt/construct "Mesh" options)))
 
 (defn manifold
   ([] (manifold (mesh)))
-  ([mesh-data] (rt/construct "Manifold" (if (map? mesh-data) (clj->js mesh-data) mesh-data))))
+  ([mesh-data] (rt/construct "Manifold" (if (map? mesh-data) (clj->js mesh-data) mesh-data)))
+  ([mesh-data context] (upstream/from-mesh (if (map? mesh-data) (clj->js mesh-data) mesh-data) context)))
 (defn is-empty? [x] (rt/call x "isEmpty"))
 (defn tetrahedron [] (rt/static "Manifold" "tetrahedron"))
 (defn polyhedron [vertices faces] (rt/native "polyhedron" (clj->js vertices) (clj->js faces)))
@@ -284,14 +288,18 @@
   (mapv #(slice object (+ bottom (* (- top bottom) (if (= n 1) 0 (/ % (dec n)))))) (range n)))
 (defn smooth
   ([mesh] (smooth mesh []))
-  ([mesh sharp] (rt/static "Manifold" "smooth" mesh (clj->js sharp))))
+  ([mesh sharp] (rt/static "Manifold" "smooth" mesh (clj->js sharp)))
+  ([mesh sharp context] (upstream/smooth-with-context mesh sharp context)))
 (defn smooth-out
   ([object] (smooth-out object 60))
   ([object angle] (smooth-out object angle 0))
   ([object angle smoothness] (rt/call object "smoothOut" angle smoothness)))
 (defn refine [object n] (rt/call object "refine" n))
 (defn refine-to-length [object length] (rt/call object "refineToLength" length))
-(defn calculate-normals [object index angle] (rt/call object "calculateNormals" index angle))
+(defn calculate-normals
+  ([object] (calculate-normals object 0 52.5))
+  ([object index] (calculate-normals object index 52.5))
+  ([object index angle] (rt/call object "calculateNormals" index angle)))
 (defn warp [object f]
   (rt/call object "warp" (fn [v] (let [result (f (vec (array-seq v)))]
                                  (doseq [i (range (count result))] (aset v i (nth result i)))))))
@@ -300,19 +308,21 @@
   ([section delta join] (offset section delta join 2))
   ([section delta join limit] (offset section delta join limit 0))
   ([section delta join limit segments]
-   (let [join-name ({:square "Square" :round "Round" :miter "Miter"} join)]
+   (let [join-name ({:square "Square" :round "Round" :miter "Miter" :bevel "Bevel"} join)]
      (when-not join-name (throw (ex-info "Unknown join type" {:join-type join})))
      (rt/call section "offset" delta join-name limit segments))))
-(defn simplify [section epsilon] (rt/call section "simplify" epsilon))
 (defn get-mesh
   ([object] (rt/call object "getMesh"))
   ([object normal-index] (rt/call object "getMesh" normal-index)))
 (def get-mesh-gl get-mesh)
 (defn status [object]
-  (nth [:NoError :NonFiniteVertex :NotManifold :VertexOutOfBounds :PropertiesWrongLength
-        :MissingPositionProperties :MergeVectorsDifferentLengths :MergeIndexOutOfBounds
-        :TransformWrongLength :RunIndexWrongLength :FaceIDWrongLength :InvalidConstruction]
-       (gobj/get (rt/call object "status") "value")))
+  (let [value (rt/call object "status")]
+    (if (string? value) (keyword value)
+        (nth [:NoError :NonFiniteVertex :NotManifold :VertexOutOfBounds :PropertiesWrongLength
+              :MissingPositionProperties :MergeVectorsDifferentLengths :MergeIndexOutOfBounds
+              :TransformWrongLength :RunIndexWrongLength :FaceIDWrongLength :InvalidConstruction
+              :ResultTooLarge :InvalidTangents :Cancelled]
+             (gobj/get value "value")))))
 (defn color
   ([object rgba] (color object rgba 3))
   ([object rgba index]
@@ -397,3 +407,24 @@
   (cond (model? model) (apply native-model/export-model model filename options)
         (scene? model) (export-scene model filename)
         :else (apply export-mesh model filename options)))
+
+(def execution-context upstream/execution-context)
+(def cancel! upstream/cancel!)
+(def cancelled? upstream/cancelled?)
+(def progress upstream/progress)
+(def with-context upstream/with-context)
+(def minkowski-sum upstream/minkowski-sum)
+(def minkowski-difference upstream/minkowski-difference)
+(def get-tolerance upstream/get-tolerance)
+(def set-tolerance upstream/set-tolerance)
+(def refine-to-tolerance upstream/refine-to-tolerance)
+(def smooth-by-normals upstream/smooth-by-normals)
+(def calculate-curvature upstream/calculate-curvature)
+(def min-gap upstream/min-gap)
+(def ray-cast-segment upstream/ray-cast-segment)
+(def read-obj-string upstream/read-obj-string)
+(def write-obj-string upstream/write-obj-string)
+(def level-set upstream/level-set)
+(def simplify upstream/simplify)
+(def mesh-data upstream/mesh-data)
+(def mesh-run-info upstream/mesh-run-info)

@@ -1,16 +1,10 @@
 (ns clj-manifold3d.core
-  "This library defines a wrapper over Manifold for clojure and clojurescript.
-  Refer to the original library for complete documentation.
-
-  This library aspires to achieve code capatibility between Clojure and ClojureScript so that models
-  build in the more friendly Java environment can be shared and played with or parameterized in the javascript
-  environment. However, there are challenges in the way the Manifold js library is provided
-  as a promise. To (mostly) support this, this library elects to accept promises at the API level.
-  Working with promises can be pretty annoying, especially without a type system that supports
-  them well. For this reason, the CLJS API generally also works on non-promise objects."
+  "Clojure and ClojureScript APIs for Manifold geometry.
+  JVM geometry is synchronous. The CLJS implementation in core.cljs is also
+  synchronous after its one-time asynchronous module initialization."
   #?(:clj
      (:import
-      [manifold3d Manifold Model MeshUtils MeshUtils$LoftAlgorithm ManifoldVector FloatVector UIntVector]
+      [manifold3d Manifold Model MeshUtils MeshUtils$LoftAlgorithm ManifoldVector FloatVector UIntVector ByteVector]
       [manifold3d.pub  SmoothnessVector Smoothness SimplePolygon Polygons PolygonsVector OpType]
       [manifold3d.manifold CrossSection CrossSectionVector Material ExportOptions MeshIO MeshGL]
       [manifold3d.linalg DoubleVec3 DoubleVec2 DoubleMat3x4 DoubleMat2x3 DoubleMat3x4Vector
@@ -19,6 +13,7 @@
   #?(:clj
      (:require
       [clj-manifold3d.impl :as impl]
+      [clj-manifold3d.upstream :as upstream]
       [clj-manifold3d.model :as native-model]
       [clj-manifold3d.animation :as animation]
       [clj-manifold3d.glb :as glb]
@@ -172,21 +167,37 @@
 
 #?(:clj
    (defn mesh
-     "Convenience function to create a mesh from sequences. `:vert-pos` is a
-  vector of [x y z] vertices. `:tri-verts` is a vector of [idx1 idx2 idx3]
-  vertex indices representing a triangular face. For maximum java performance
-  use FromBuffer constructors directly and use natively ordered structures that
-  can provide java.nio buffers. If necessary, write meshing alorthims in c++
-  using GLM directly and bind to them."
-     [& {:keys [tri-verts vert-pos]}]
-     (cond-> (MeshGL.)
-       ;; true (doto (.numProp 3))
-       tri-verts (doto (.triVerts (UIntVector/FromBuffer (vec3-sequence-to-native-long-buffer tri-verts))))
-       vert-pos (doto (.vertProperties (FloatVector/FromBuffer (vec3-sequence-to-native-float-buffer vert-pos)))))))
+     "Construct a MeshGL from :vert-pos and triangle :tri-verts, or flat
+     :vert-properties with :num-prop. Optional merge/run metadata, :run-flags,
+     :face-id, :halfedge-tangent and :tolerance round-trip through mesh-data."
+     [& {:keys [tri-verts vert-pos vert-properties num-prop merge-from-vert
+                merge-to-vert run-index run-original-id run-transform run-flags
+                face-id halfedge-tangent tolerance] :or {num-prop 3 tolerance 0}}]
+     (let [out (doto (MeshGL.) (.numProp num-prop) (.tolerance tolerance))]
+       (when-let [values (or vert-properties (when vert-pos (mapcat identity vert-pos)))]
+         (with-open [v (FloatVector/FromArray (float-array values))] (.vertProperties out v)))
+       (doseq [[key values] [[:tri-verts (when tri-verts (mapcat identity tri-verts))]
+                             [:merge-from-vert merge-from-vert] [:merge-to-vert merge-to-vert]
+                             [:run-index run-index] [:run-original-id run-original-id] [:face-id face-id]]]
+         (when values
+           (with-open [v (UIntVector/FromArray (long-array values))]
+             (case key
+               :tri-verts (.triVerts out v) :merge-from-vert (.mergeFromVert out v)
+               :merge-to-vert (.mergeToVert out v) :run-index (.runIndex out v)
+               :run-original-id (.runOriginalID out v) :face-id (.faceID out v)))))
+       (doseq [[key values] [[:run-transform run-transform] [:halfedge-tangent halfedge-tangent]]]
+         (when values (with-open [v (FloatVector/FromArray (float-array values))]
+                        (case key :run-transform (.runTransform out v) :halfedge-tangent (.halfedgeTangent out v)))))
+       (when run-flags
+         (with-open [v (ByteVector.)]
+           (doseq [flag run-flags] (.pushBack v (unchecked-byte flag)))
+           (.runFlags out v)))
+       out)))
 
 (defn manifold
   "Creates a `Manifold` ."
   ([] #?(:clj (Manifold.)))
+  ([mesh context] #?(:clj (upstream/from-mesh mesh context)))
   ([mesh]
    #?(:clj (Manifold. ^MeshGL mesh)
       :cljs (update-manifold *manifold-module*
@@ -360,6 +371,8 @@
   for more details."
   ([mesh]
    (smooth mesh []))
+  ([mesh sharpened-edges context]
+   #?(:clj (upstream/smooth-with-context mesh sharpened-edges context)))
   ([mesh sharpened-edges]
    #?(:clj (Manifold/Smooth ^MeshGL mesh
                             (let [v (SmoothnessVector.)]
@@ -433,6 +446,8 @@ pseudo-normals to define the tangent vectors.
  edge. By default, no edges are sharp and all normals are shared. With a value
  of zero, the model is faceted and all normals match their triangle normals,
  but in this case it would be better not to calculate normals at all."
+     ([manifold] (calculate-normals manifold 0 52.5))
+     ([manifold normal-idx] (calculate-normals manifold normal-idx 52.5))
      ([manifold normal-idx min-sharp-angle]
       (if (model? manifold) (.calculateNormals ^Model manifold normal-idx min-sharp-angle)
           (.calculateNormals ^Manifold manifold normal-idx min-sharp-angle)))))
@@ -1021,11 +1036,12 @@ to the interpolated surface according to their barycentric coordinates."
                     (case join-type
                       :square 0
                       :round 1
-                      :miter 2)
+                      :miter 2
+                      :bevel 3)
                     miter-limit arc-tolerance)
       :cljs (update-manifold section
                              (fn [x]
-                               (.offset x delta (case join-type :square 0 :round 1 :miter 2)
+                               (.offset x delta (case join-type :square 0 :round 1 :miter 2 :bevel 3)
                                         miter-limit arc-tolerance))))))
 
 #?(:clj
@@ -1052,7 +1068,10 @@ to the interpolated surface according to their barycentric coordinates."
        8 :TransformWrongLength
        9 :RunIndexWrongLength
        10 :FaceIDWrongLength
-       11 :InvalidConstruction)))
+       11 :InvalidConstruction
+       12 :ResultTooLarge
+       13 :InvalidTangents
+       14 :Cancelled)))
 
 #?(:clj
    (defn color
@@ -1242,14 +1261,6 @@ to the interpolated surface according to their barycentric coordinates."
      (let [face-normals (.toFloatArray (.getFaceNormals ^Manifold man))]
        (into [] (partition-all 3) face-normals))))
 
-#?(:clj
-   (defn simplify
-     "Remove vertices from contours in `cross-section` that are less than the specified distance
-  `epsilon` from an imaginary line that passes through its two adjacent vertices. Near-duplicates
-  and colinear points will be removed. It is recommended to apply this function after `offset`, especially when
-  offseting with join-type = :miter. CLJ only."
-     [cross-section epsilon]
-     (.simplify ^CrossSection (impl/to-csg cross-section) epsilon)))
 
 #?(:clj
    (defn material
@@ -1368,3 +1379,30 @@ to the interpolated surface according to their barycentric coordinates."
       (extrude 10))
 
   )
+
+;; Portable additions from Manifold 3.5.
+#?(:clj (do
+  (def execution-context upstream/execution-context)
+  (def cancel! upstream/cancel!)
+  (def cancelled? upstream/cancelled?)
+  (def progress upstream/progress)
+  (def with-context upstream/with-context)
+  (def minkowski-sum upstream/minkowski-sum)
+  (def minkowski-difference upstream/minkowski-difference)
+  (def get-tolerance upstream/get-tolerance)
+  (def set-tolerance upstream/set-tolerance)
+  (def refine-to-tolerance upstream/refine-to-tolerance)
+  (def smooth-by-normals upstream/smooth-by-normals)
+  (def calculate-curvature upstream/calculate-curvature)
+  (def min-gap upstream/min-gap)
+  (def ray-cast-segment upstream/ray-cast-segment)
+  (def read-obj-string upstream/read-obj-string)
+  (def write-obj-string upstream/write-obj-string)
+  (def level-set upstream/level-set)
+  (defn simplify
+    "Simplify a solid, Model, cross-section, or polygon within tolerance.
+    Defaults to the native solid tolerance, or 1e-6 for cross-sections."
+    ([object] (upstream/simplify (impl/to-csg object)))
+    ([object tolerance] (upstream/simplify (impl/to-csg object) tolerance)))
+  (def mesh-data upstream/mesh-data)
+  (def mesh-run-info upstream/mesh-run-info)))

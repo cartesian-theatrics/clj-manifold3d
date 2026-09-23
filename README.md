@@ -7,6 +7,72 @@ This library provides a Clojure(Script) wrapper over Emmett Lalish's incredible 
 
 It implements most of the library functionality, plus extends it to support polyhedrons and lofts. It provides nearly a full superset of OpenSCAD functionality.
 
+## Manifold 3.5.3 update
+
+This checkout targets upstream **v3.5.3** (`0edd9d54876f3135e431575214dd6d8a72866fee`)
+plus this project's native extensions (fork integration commit `d8778ce9`).
+Use matching, freshly built JNI and WASM
+bindings from the sibling `manifold` checkout. The published versions in the
+Install examples below predate these additions.
+
+Both CLJ and CLJS now expose:
+
+| API | Purpose |
+| --- | --- |
+| `minkowski-sum`, `minkowski-difference` | Solid dilation and erosion |
+| `simplify`, `get-tolerance`, `set-tolerance`, `refine-to-tolerance` | Solid simplification and refinement control |
+| `smooth-by-normals`, `calculate-curvature` | Smoothing tangents and curvature properties |
+| `level-set` | Build a solid from a signed distance function |
+| `min-gap`, `ray-cast-segment` | Separation and all triangle hits on a finite segment |
+| `execution-context`, `with-context`, `progress`, `cancel!`, `cancelled?` | Native progress and cancellation |
+| `read-obj-string`, `write-obj-string` | Upstream's precision-preserving, geometry-only OBJ dialect |
+| `mesh-data`, `mesh-run-info` | Portable mesh buffers, provenance, backside and normal flags |
+
+`offset` accepts `:bevel`. `calculate-normals` now also accepts one argument
+(default property index 0) or two arguments (explicit index), with upstream's
+52.5 degree sharp-angle default. Existing explicit arities remain valid.
+`simplify` still accepts cross-sections and JVM polygons; it additionally accepts
+solids and native Models. Its cross-section default remains `1e-6`. The existing
+`smooth-out` default remains 60 degrees. Model appearance is retained by
+`simplify`, `set-tolerance`, and `refine-to-tolerance`; operations that create
+new surfaces without an appearance policy require a bare Manifold.
+
+```clojure
+(require '[clj-manifold3d.core :as m])
+
+;; In CLJS, await the existing m/init! once before calling geometry functions.
+(def rounded
+  (m/minkowski-sum (m/cube 10 10 10) (m/sphere 1 24)))
+
+;; Positive SDF values are inside, on both runtimes.
+(def implicit-ball
+  (m/level-set (fn [[x y z]] (- 4 (+ (* x x) (* y y) (* z z))))
+               {:min [-3 -3 -3] :max [3 3 3]} 0.3))
+
+(def hits (m/ray-cast-segment rounded [-5 5 5] [20 5 5]))
+;; Each hit has :face-id, :position, :normal, and :distance.
+;; :distance is the fraction along the segment, not a length in model units.
+```
+
+The existing `ray-cast` still takes a direction and returns the nearest hit.
+The new segment API returns all hits, including coincident hits on adjacent
+triangles. OBJ string round-tripping retains geometry, not colors, UVs, normals,
+materials or animation; use GLB for those assets.
+
+Contexts follow upstream's limited propagation rules: attach one immediately
+before `status`, an eager refinement, hull or Minkowski operation. Transforms
+and booleans return values without the attachment; queries such as `volume`
+and `get-mesh-gl` do not observe it. Mesh factories also accept a context via
+`(m/manifold mesh ctx)` and `(m/smooth mesh sharp-edges ctx)`, and `level-set`
+accepts `:context ctx`. Cancellation is permanent for that context. CLJS geometry
+calls are synchronous, so UI cancellation during a call needs worker isolation.
+Level-set callbacks execute synchronously on the calling thread and propagate
+Clojure/ClojureScript exceptions after native cleanup.
+
+The stable release was selected to preserve the existing fill rules, tolerance,
+and smoothing APIs; post-release upstream development removes some of them.
+See the sibling fork's `UPSTREAM_UPDATE.md` for the native integration details.
+
 # Install
 
 You need include the native [Manifold Bindings](https://github.com/SovereignShop/manifold) for your platform separately. For example:
@@ -240,18 +306,34 @@ This project uses the Clojure CLI. The `:clj-dev` alias supplies the JVM
 native Manifold binding, source paths, and CIDER's nREPL middleware.
 
 The development and test aliases use the native JAR at
-`../manifold/bindings/java/target/manifold3d-1.0.39.jar`. The new UV methods
-require the matching bindings; older published JARs do not expose them.
-For a fresh Linux x86-64 checkout, clone the tested native branch alongside
-this repository (it includes the rebuilt JAR):
+`../manifold/bindings/java/target/manifold3d-1.0.39.jar`. This local filename
+is retained for compatibility; it is not a newly published artifact version.
+Use the matching sibling checkout containing the v3.5.3 integration. Do not use
+a previously generated 3.0 jar with these wrappers.
+
+With CMake, a C++17 compiler, Maven, a full JDK and matching Assimp development
+headers/runtime installed, build from the sibling native repository:
 
 ```sh
-git clone --branch surface-uv-mapping https://github.com/SovereignShop/manifold.git ../manifold
+cd ../manifold
+cmake -S . -B build-upstream -DCMAKE_BUILD_TYPE=Release \
+  -DMANIFOLD_EXPORT=ON -DMANIFOLD_PAR=OFF -DMANIFOLD_TEST=ON \
+  -DMANIFOLD_PYBIND=OFF -DMANIFOLD_JSBIND=OFF
+cmake --build build-upstream --parallel 4
+ctest --test-dir build-upstream --output-on-failure
+mvn -f bindings/java/pom.xml -Dmanifold.build.dir="$PWD/build-upstream" package
+cd ../clj-manifold3d
 ```
 
-If `../manifold` already exists, use a matching checkout without overwriting
-local changes. The native runtime still requires the system libraries described
-under Install above.
+For CLJS, activate Emscripten and run `npm run build:wasm` to rebuild both
+`public/wasm` and `target/wasm`. Java and WASM binaries must come from the same
+native source revision. Already-running JVMs need a restart to use a new JNI
+library. Native packaging was validated on Linux x86-64; macOS/Windows packaging
+has not been validated for this update.
+
+Run `npm test` for shared JVM, CLJS dev/advanced, parity and browser tests, and
+`clojure -M:clj-dev:test-regressions` for the extended JVM geometry, texture,
+animation, spatial and example regression suite.
 
 For a local JVM REPL:
 
@@ -1153,20 +1235,10 @@ defaults to `1e-7` model units; choose appropriately for your model's scale.
 the input or its vertex properties. This is best effort, not general mesh repair:
 check `(m/status (m/manifold merged))` for `:NoError`.
 
-All additions in this section are JVM implementations. Scene data and functional
-APIs are designed for a subsequent CLJS port; no CLJS parity is claimed yet.
-They require the freshly rebuilt sibling Java bindings, already selected by
-the development/test aliases. Rebuild with a full JDK (including JNI headers):
-
-```sh
-cd ../manifold/bindings/java
-mvn -Dmaven.test.skip=true package
-```
-
-The skip flag bypasses the binding project's stale Java test sources; the native
-queries are exercised through the Clojure integration tests. Already-running JVMs
-keep loaded native classes: use a fresh JVM for the new bindings, without stopping
-an existing REPL session. Run the working assembly example with:
+These additions have JVM and CLJS implementations, exercised by the shared
+integration tests. Build the matching native libraries as described under
+Development above. Already-running JVMs keep loaded native classes and need a
+restart to use rebuilt bindings. Run the working assembly example with:
 
 ```sh
 clojure -M:clj-dev -m scene-assembly target/scene-assembly.glb
