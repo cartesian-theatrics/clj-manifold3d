@@ -111,175 +111,6 @@ and build the matching WASM bindings as described below. Java/JNI dependencies
 are not required by CLJS applications. Old generated loaders under `src/js`
 and the original viewer prototype are not used by the current bindings.
 
-## ClojureScript / WASM
-
-### Local “Try it!” playground
-
-After `npm ci` and `npm run build:wasm`, run:
-
-```sh
-npm run try-it
-```
-
-Open **http://localhost:8091/**. The page starts with an editable twisted loft,
-an orbitable Three.js model viewer, wireframe/grid controls, and GLB download.
-Other examples demonstrate booleans, a raised American-flag UV patch, and a playing pivot
-animation with its full scene hierarchy and quaternion keyframes in the editor.
-The CodeMirror editor provides ClojureScript syntax highlighting, matching
-brackets, automatic closing parentheses/brackets/quotes, indentation, and undo.
-Run code with the button or Ctrl/Cmd+Enter; edits are saved locally per example.
-Set `PORT` to change the server port.
-
-The editor uses [SCI](https://github.com/babashka/sci) to interpret a CLJS subset
-against the real native bindings. It is not a self-hosted full CLJS compiler.
-`m`, `texture`, `animation`, and `math` are preconfigured; explicit `require`
-for those namespaces works too. Return a solid, cross-section, scene, or
-`{:geometry solid :texture png-bytes :prop-index 3}` for a textured model.
-The flag example draws 13 stripes and 50 stars using `m/cube`, `m/cross-section`,
-and `m/color`, bakes the colored geometry with `texture/bake`, then maps it onto
-a sphere with native `texture/geodesic-uv` and `:depth-boundary :step`.
-`texture/bake` is a synchronous CLJS helper for unlit, opaque +Z projections;
-it supports Node and browser workers. Its colors are linear RGBA (like `m/color`),
-encoded as an sRGB PNG. No external flag image or network request is involved.
-Arbitrary JS/npm imports and asset/file I/O are not exposed in the editor.
-
-Evaluation runs entirely in a dedicated browser worker, with a fresh context
-and native-handle cleanup each time. Stop (or the 30-second timeout) terminates
-and restarts the worker. Errors preserve the previous model. The local server
-serves static app/WASM/Three.js files only, binds to loopback, and never executes
-submitted code. Worker isolation is for responsiveness, not a hard browser
-memory quota or a security guarantee for running hostile programs.
-
-`npm run build:try-it` bundles the editor and compiles both the app and worker
-with Closure advanced optimizations; `npm run serve:try-it` serves the existing build. Run
-`npm run test:try-it` after building to check the actual viewer, editable loft,
-GLB download, editor highlighting/bracket pairing, errors, infinite-loop
-cancellation, animation, baked flag colors/stars/UVs/displacement, persistence,
-and mobile layout in Chromium. No CDN or external service is needed at runtime.
-
-The implementation in `src/cljs/clj_manifold3d` uses the same native geometry
-algorithms as the JVM, including halfedge surface mapping, UV unwrapping,
-image/numeric depth, stepped boundaries, and inner-corner miters. Modeling
-operations are synchronous and immutable **after awaiting `init!` once**.
-This replaces the old experimental promise-per-operation API.
-
-### Build and test
-
-Prerequisites: Node 18+, npm, Clojure CLI/JDK, CMake, and an activated Emscripten
-SDK (tested with Emscripten 3.1.64). The sibling `../manifold` checkout must
-include the WASM MeshUtils extensions. The JVM tests additionally need the
-local native JAR and its system libraries described above.
-
-```sh
-source /path/to/emsdk/emsdk_env.sh
-npm ci
-npm run build:wasm
-npx playwright install chromium
-npm test
-```
-
-`build:wasm` compiles the C++ sources in `../manifold` into a separate
-`build-cljs` directory; it never reuses native object files or the old checked-in
-WASM. Override `MANIFOLD_SOURCE`, `MANIFOLD_WASM_BUILD`, or `BUILD_JOBS` if needed.
-Generated artifacts are ignored by git:
-
-- `public/wasm/manifold.js` and `manifold.wasm`: browser loader and binary.
-- `target/wasm/manifold.cjs` and `manifold.wasm`: Node loader and binary.
-
-`npm test` runs the shared `.cljc` behavioral tests on the JVM, generates JVM
-reference fixtures, then runs CLJS in Node (development and Closure **advanced**)
-and headless Chromium (advanced). Individual commands are `test:shared:jvm`,
-`fixtures:jvm`, `test:cljs`, `test:advanced`, and `test:browser`.
-Run `fixtures:jvm` before standalone CLJS tests. `CHROMIUM_PATH` can select an
-existing Chromium executable. No application or REPL is stopped by these tests.
-
-Portable assertions live in `test/shared/clj_manifold3d/portable_*_test.cljc`;
-`test_support.cljc` adapts only platform representations and file I/O. Browser,
-WASM ownership, async assets, and mesh-codec integration tests also exercise the
-optimized builds. The test configuration explicitly retains tests in release
-builds and fails if zero tests execute.
-
-### Browser usage
-
-Load the generated loader before your compiled application:
-
-```html
-<script src="/wasm/manifold.js"></script>
-<script src="/js/app.js"></script>
-```
-
-```clojure
-(ns example.app
-  (:require [clj-manifold3d.core :as m]
-            [clj-manifold3d.texture :as texture]))
-
-(-> (m/init! {:wasm-url "/wasm/manifold.wasm"})
-    (.then
-      (fn [_]
-        (m/with-disposal
-          (fn []
-            (let [shape (texture/geodesic-uv
-                          (m/sphere 5 64)
-                          :origin [0 0 5] :normal [0 0 1]
-                          :size [3 2] :pixel-size 0.2
-                          :depth-map [[0 0 0] [0 1 0] [0 0 0]]
-                          :depth-scale 0.2)]
-              (m/export-model shape "surface.glb"))))))
-    (.catch js/console.error))
-```
-
-For Node, pass the fresh loader and binary to `init!`:
-
-```clojure
-(require '[goog.object :as gobj])
-
-(m/init! {:factory (js/require "/absolute/path/to/target/wasm/manifold.cjs")
-          :wasm-binary ((gobj/get (js/require "node:fs") "readFileSync")
-                        "/absolute/path/to/target/wasm/manifold.wasm")})
-```
-
-The Emscripten loader stays **outside Closure compilation**. Every Manifold
-method/property accessed by the CLJS bindings uses a string-keyed boundary,
-so advanced property renaming cannot change the native ABI. Application code
-can use ordinary CLJS calls such as `(m/cube 2 3 4)`; direct calls on foreign
-JS handles should use `goog.object` or declared externs.
-
-### Ownership, I/O, and parity boundaries
-
-- Native handles own WASM memory. Call `(m/dispose! shape ...)` when finished,
-  or use synchronous `(m/with-disposal (fn [] ...))`. The scope releases its
-  created handles even on exceptions; return ordinary data/bytes, not handles
-  or promises. Inputs created outside the scope are never implicitly released.
-  Mesh snapshots, frames, scene maps, and byte arrays are JS-managed data.
-- Numeric grids and `Uint8Array`/`ArrayBuffer` depth images map synchronously.
-  Filename/URL depth inputs return a Promise. `text`, `load-image`,
-  `load-surface`, `ply-file-to-surface`, `import-mesh`, and `texture/export-glb`
-  always return promises. Keep source handles alive until async work finishes.
-  Font/image decoding uses the native implementations and cleans up temporary
-  files in WASM's private filesystem.
-  This change also fixes native PLY storage allocation and image color-channel
-  indexing; rebuild the Java JAR separately to apply those two fixes on the JVM.
-- `m/scene` and `m/export-scene` support the JVM animation data model.
-  `m/export-model` accepts a solid or scene. Export writes a file in Node,
-  downloads in a browser, or returns `Uint8Array` when the filename is `nil`.
-  Use `texture/export-glb` to embed a PNG/JPEG with UV-mapped geometry.
-- `export-mesh` supports GLB, binary STL, and geometry-only OBJ, with
-  `:format` available for in-memory output. GLB material options include
-  `:color`, `:alpha`, `:roughness`, `:metalness`, `:normal-idx`, `:color-idx`,
-  `:alpha-idx`, and `:uv-idx`; channel selectors exclude XYZ, as on the JVM.
-  Texture mapping's `:prop-index`, by contrast, includes XYZ.
-- `import-mesh` reads STL, triangulated geometry-only OBJ, and one static,
-  untransformed triangle primitive from GLB. UV/color/normal attributes are
-  retained and physical seams repaired. It rejects unsupported GLB scenes,
-  animation, and required extensions explicitly. 3MF/3DS and other Assimp
-  formats remain JVM-only; this is not complete Assimp format parity.
-- CLJS `bounds` returns `{:min [...] :max [...]}`, `to-polygons` returns
-  Clojure vectors, and `get-mesh`/`get-mesh-gl` return native JS Mesh snapshots.
-  Frames use radians; solid rotations use degrees, matching the JVM API.
-  Surface depth has the same geometric limits as native code: very large
-  offsets can fold or self-intersect; global self-intersection detection is
-  not provided.
-
 # Development
 
 This project uses the Clojure CLI. The `:clj-dev` alias supplies the JVM
@@ -1226,6 +1057,175 @@ clojure -M:clj-dev -m scene-assembly target/scene-assembly.glb
 
 The example reports no interference at times 0 and 0.5, and interference at 1.
 The GLB remains animated and keeps the colored materials.
+
+## ClojureScript / WASM
+
+### Local “Try it!” playground
+
+After `npm ci` and `npm run build:wasm`, run:
+
+```sh
+npm run try-it
+```
+
+Open **http://localhost:8091/**. The page starts with an editable twisted loft,
+an orbitable Three.js model viewer, wireframe/grid controls, and GLB download.
+Other examples demonstrate booleans, a raised American-flag UV patch, and a playing pivot
+animation with its full scene hierarchy and quaternion keyframes in the editor.
+The CodeMirror editor provides ClojureScript syntax highlighting, matching
+brackets, automatic closing parentheses/brackets/quotes, indentation, and undo.
+Run code with the button or Ctrl/Cmd+Enter; edits are saved locally per example.
+Set `PORT` to change the server port.
+
+The editor uses [SCI](https://github.com/babashka/sci) to interpret a CLJS subset
+against the real native bindings. It is not a self-hosted full CLJS compiler.
+`m`, `texture`, `animation`, and `math` are preconfigured; explicit `require`
+for those namespaces works too. Return a solid, cross-section, scene, or
+`{:geometry solid :texture png-bytes :prop-index 3}` for a textured model.
+The flag example draws 13 stripes and 50 stars using `m/cube`, `m/cross-section`,
+and `m/color`, bakes the colored geometry with `texture/bake`, then maps it onto
+a sphere with native `texture/geodesic-uv` and `:depth-boundary :step`.
+`texture/bake` is a synchronous CLJS helper for unlit, opaque +Z projections;
+it supports Node and browser workers. Its colors are linear RGBA (like `m/color`),
+encoded as an sRGB PNG. No external flag image or network request is involved.
+Arbitrary JS/npm imports and asset/file I/O are not exposed in the editor.
+
+Evaluation runs entirely in a dedicated browser worker, with a fresh context
+and native-handle cleanup each time. Stop (or the 30-second timeout) terminates
+and restarts the worker. Errors preserve the previous model. The local server
+serves static app/WASM/Three.js files only, binds to loopback, and never executes
+submitted code. Worker isolation is for responsiveness, not a hard browser
+memory quota or a security guarantee for running hostile programs.
+
+`npm run build:try-it` bundles the editor and compiles both the app and worker
+with Closure advanced optimizations; `npm run serve:try-it` serves the existing build. Run
+`npm run test:try-it` after building to check the actual viewer, editable loft,
+GLB download, editor highlighting/bracket pairing, errors, infinite-loop
+cancellation, animation, baked flag colors/stars/UVs/displacement, persistence,
+and mobile layout in Chromium. No CDN or external service is needed at runtime.
+
+The implementation in `src/cljs/clj_manifold3d` uses the same native geometry
+algorithms as the JVM, including halfedge surface mapping, UV unwrapping,
+image/numeric depth, stepped boundaries, and inner-corner miters. Modeling
+operations are synchronous and immutable **after awaiting `init!` once**.
+This replaces the old experimental promise-per-operation API.
+
+### Build and test
+
+Prerequisites: Node 18+, npm, Clojure CLI/JDK, CMake, and an activated Emscripten
+SDK (tested with Emscripten 3.1.64). The sibling `../manifold` checkout must
+include the WASM MeshUtils extensions. The JVM tests additionally need the
+local native JAR and its system libraries described above.
+
+```sh
+source /path/to/emsdk/emsdk_env.sh
+npm ci
+npm run build:wasm
+npx playwright install chromium
+npm test
+```
+
+`build:wasm` compiles the C++ sources in `../manifold` into a separate
+`build-cljs` directory; it never reuses native object files or the old checked-in
+WASM. Override `MANIFOLD_SOURCE`, `MANIFOLD_WASM_BUILD`, or `BUILD_JOBS` if needed.
+Generated artifacts are ignored by git:
+
+- `public/wasm/manifold.js` and `manifold.wasm`: browser loader and binary.
+- `target/wasm/manifold.cjs` and `manifold.wasm`: Node loader and binary.
+
+`npm test` runs the shared `.cljc` behavioral tests on the JVM, generates JVM
+reference fixtures, then runs CLJS in Node (development and Closure **advanced**)
+and headless Chromium (advanced). Individual commands are `test:shared:jvm`,
+`fixtures:jvm`, `test:cljs`, `test:advanced`, and `test:browser`.
+Run `fixtures:jvm` before standalone CLJS tests. `CHROMIUM_PATH` can select an
+existing Chromium executable. No application or REPL is stopped by these tests.
+
+Portable assertions live in `test/shared/clj_manifold3d/portable_*_test.cljc`;
+`test_support.cljc` adapts only platform representations and file I/O. Browser,
+WASM ownership, async assets, and mesh-codec integration tests also exercise the
+optimized builds. The test configuration explicitly retains tests in release
+builds and fails if zero tests execute.
+
+### Browser usage
+
+Load the generated loader before your compiled application:
+
+```html
+<script src="/wasm/manifold.js"></script>
+<script src="/js/app.js"></script>
+```
+
+```clojure
+(ns example.app
+  (:require [clj-manifold3d.core :as m]
+            [clj-manifold3d.texture :as texture]))
+
+(-> (m/init! {:wasm-url "/wasm/manifold.wasm"})
+    (.then
+      (fn [_]
+        (m/with-disposal
+          (fn []
+            (let [shape (texture/geodesic-uv
+                          (m/sphere 5 64)
+                          :origin [0 0 5] :normal [0 0 1]
+                          :size [3 2] :pixel-size 0.2
+                          :depth-map [[0 0 0] [0 1 0] [0 0 0]]
+                          :depth-scale 0.2)]
+              (m/export-model shape "surface.glb"))))))
+    (.catch js/console.error))
+```
+
+For Node, pass the fresh loader and binary to `init!`:
+
+```clojure
+(require '[goog.object :as gobj])
+
+(m/init! {:factory (js/require "/absolute/path/to/target/wasm/manifold.cjs")
+          :wasm-binary ((gobj/get (js/require "node:fs") "readFileSync")
+                        "/absolute/path/to/target/wasm/manifold.wasm")})
+```
+
+The Emscripten loader stays **outside Closure compilation**. Every Manifold
+method/property accessed by the CLJS bindings uses a string-keyed boundary,
+so advanced property renaming cannot change the native ABI. Application code
+can use ordinary CLJS calls such as `(m/cube 2 3 4)`; direct calls on foreign
+JS handles should use `goog.object` or declared externs.
+
+### Ownership, I/O, and parity boundaries
+
+- Native handles own WASM memory. Call `(m/dispose! shape ...)` when finished,
+  or use synchronous `(m/with-disposal (fn [] ...))`. The scope releases its
+  created handles even on exceptions; return ordinary data/bytes, not handles
+  or promises. Inputs created outside the scope are never implicitly released.
+  Mesh snapshots, frames, scene maps, and byte arrays are JS-managed data.
+- Numeric grids and `Uint8Array`/`ArrayBuffer` depth images map synchronously.
+  Filename/URL depth inputs return a Promise. `text`, `load-image`,
+  `load-surface`, `ply-file-to-surface`, `import-mesh`, and `texture/export-glb`
+  always return promises. Keep source handles alive until async work finishes.
+  Font/image decoding uses the native implementations and cleans up temporary
+  files in WASM's private filesystem.
+  This change also fixes native PLY storage allocation and image color-channel
+  indexing; rebuild the Java JAR separately to apply those two fixes on the JVM.
+- `m/scene` and `m/export-scene` support the JVM animation data model.
+  `m/export-model` accepts a solid or scene. Export writes a file in Node,
+  downloads in a browser, or returns `Uint8Array` when the filename is `nil`.
+  Use `texture/export-glb` to embed a PNG/JPEG with UV-mapped geometry.
+- `export-mesh` supports GLB, binary STL, and geometry-only OBJ, with
+  `:format` available for in-memory output. GLB material options include
+  `:color`, `:alpha`, `:roughness`, `:metalness`, `:normal-idx`, `:color-idx`,
+  `:alpha-idx`, and `:uv-idx`; channel selectors exclude XYZ, as on the JVM.
+  Texture mapping's `:prop-index`, by contrast, includes XYZ.
+- `import-mesh` reads STL, triangulated geometry-only OBJ, and one static,
+  untransformed triangle primitive from GLB. UV/color/normal attributes are
+  retained and physical seams repaired. It rejects unsupported GLB scenes,
+  animation, and required extensions explicitly. 3MF/3DS and other Assimp
+  formats remain JVM-only; this is not complete Assimp format parity.
+- CLJS `bounds` returns `{:min [...] :max [...]}`, `to-polygons` returns
+  Clojure vectors, and `get-mesh`/`get-mesh-gl` return native JS Mesh snapshots.
+  Frames use radians; solid rotations use degrees, matching the JVM API.
+  Surface depth has the same geometric limits as native code: very large
+  offsets can fold or self-intersect; global self-intersection detection is
+  not provided.
 
 # Modeling Journal
 
