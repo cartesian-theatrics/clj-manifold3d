@@ -1,6 +1,7 @@
 (ns clj-manifold3d.glb
   "Small platform-independent GLB encoder. Public output is Uint8Array."
   (:require [clj-manifold3d.runtime :as rt]
+            [clj-manifold3d.glb-assets :as assets]
             [goog.object :as gobj]))
 
 (defn align4 [n] (+ n (mod (- 4 (mod n 4)) 4)))
@@ -30,6 +31,46 @@
   (let [result (js/Uint8Array. length)]
     (reduce (fn [offset segment] (.set result segment offset) (+ offset (alength segment))) 0 segments)
     result))
+
+(defn document? [x] (= ::document (:model/type x)))
+(defn document [gltf binary] {:model/type ::document :gltf gltf :binary binary})
+(defn read-glb
+  "Read embedded, single-buffer glTF 2.0 from a Uint8Array or ArrayBuffer."
+  [source]
+  (let [bytes (if (instance? js/ArrayBuffer source) (js/Uint8Array. source) source)
+        n (alength bytes)]
+    (when (< n 20) (throw (ex-info "Truncated GLB header" {})))
+    (let [view (js/DataView. (.-buffer bytes) (.-byteOffset bytes) n)
+          uint #(.getUint32 view % true)]
+      (when-not (and (= 0x46546c67 (uint 0)) (= 2 (uint 4)) (= n (uint 8)))
+        (throw (ex-info "Invalid GLB 2.0 header or length" {})))
+      (loop [offset 12 gltf nil binary nil]
+        (if (< offset n)
+          (do
+            (when (> (+ offset 8) n) (throw (ex-info "Truncated GLB chunk header" {})))
+            (let [length (uint offset) kind (uint (+ offset 4)) end (+ offset 8 length)]
+              (when (or (> end n) (not (zero? (mod length 4))))
+                (throw (ex-info "Invalid GLB chunk length" {:length length})))
+              (let [chunk (.slice bytes (+ offset 8) end)]
+                (case kind
+                  0x4e4f534a (do (when gltf (throw (ex-info "Duplicate JSON chunk" {})))
+                                 (recur end (js->clj (js/JSON.parse (.decode (js/TextDecoder.) chunk))) binary))
+                  0x004e4942 (do (when (or (nil? gltf) binary) (throw (ex-info "Unexpected BIN chunk" {})))
+                                 (recur end gltf chunk))
+                  (throw (ex-info "Unsupported GLB chunk" {:type kind}))))))
+          (let [buffers (get gltf "buffers" []) binary (or binary (js/Uint8Array. 0))]
+            (when-not (and (= "2.0" (get-in gltf ["asset" "version"]))
+                           (<= (count buffers) 1) (not-any? #(contains? % "uri") buffers)
+                           (<= (get (first buffers) "byteLength" 0) (alength binary))
+                           (not-any? #(contains? % "uri") (get gltf "images" [])))
+              (throw (ex-info "Expected glTF 2.0 with embedded buffers and images" {})))
+            (document gltf binary)))))))
+
+(defn append-document [a b]
+  (let [binary (pad-bytes (:binary a) 0) other (:binary b)
+        n (+ (alength binary) (alength other))]
+    (document (assets/append-gltf (:gltf a) (:gltf b) (alength binary))
+              (join-segments [binary other] n))))
 (defn encode [document segments bin-length]
   (let [json (pad-bytes (.encode (js/TextEncoder.) (js/JSON.stringify (clj->js document))) 32)
         binary (pad-bytes (join-segments segments bin-length) 0)

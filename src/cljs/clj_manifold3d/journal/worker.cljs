@@ -4,6 +4,9 @@
             [clj-manifold3d.animation :as animation]
             [clj-manifold3d.runtime :as rt]
             [clj-manifold3d.journal.document :as doc]
+            [clj-manifold3d.journal.namespace :as ns-form]
+            [clj-manifold3d.journal.runtime-api :as runtime-api]
+            [clj-manifold3d.math :as math]
             [clj-manifold3d.journal.schema :as schema]
             [datascript.core :as d]
             [cljs.reader :as reader]
@@ -27,21 +30,20 @@
 (defn context [documents]
   (sci/init
    {:features #{:cljs}
-    :load-fn (fn [{:keys [namespace]}] (when-let [s (get documents (str namespace))] {:source s}))
+    :load-fn (fn [{:keys [namespace]}]
+               (when-let [document (get documents (str namespace))]
+                 (doseq [b (:blocks document) :when (= "code" (:kind b))] (ns-form/assert-body! (:source b)))
+                 {:source (doc/source document)}))
     :namespaces
     {'clj-manifold3d.core
-     (sci/copy-ns clj-manifold3d.core (sci/create-ns 'clj-manifold3d.core)
-                  {:exclude [init! dispose! with-disposal import-mesh export-mesh export-model export-scene
-                             text load-image load-surface ply-file-to-surface]})
+     (apply dissoc (sci/copy-ns clj-manifold3d.core (sci/create-ns 'clj-manifold3d.core)
+                               {:exclude [with-disposal]}) runtime-api/core-exclusions)
      'clj-manifold3d.texture
-     {'uv texture/uv 'planar-uv-native texture/planar-uv-native 'unwrap-native texture/unwrap-native
-      'geodesic-uv texture/geodesic-uv 'geodesic-uv-native texture/geodesic-uv-native 'bake texture/bake}
+     (select-keys (sci/copy-ns clj-manifold3d.texture (sci/create-ns 'clj-manifold3d.texture)) runtime-api/texture-functions)
      'clj-manifold3d.animation
-     {'scene animation/scene 'scene? animation/scene? 'keyframes animation/keyframes
-      'sample animation/sample 'sample-times animation/sample-times 'pivot-arm-scene animation/pivot-arm-scene}
-     'math {'pi js/Math.PI 'sin js/Math.sin 'cos js/Math.cos 'sqrt js/Math.sqrt 'pow js/Math.pow}}
-    :aliases {'m 'clj-manifold3d.core 'texture 'clj-manifold3d.texture
-              'animation 'clj-manifold3d.animation 'math 'math}}))
+     (select-keys (sci/copy-ns clj-manifold3d.animation (sci/create-ns 'clj-manifold3d.animation)) runtime-api/animation-functions)
+     'clj-manifold3d.math
+     (select-keys (sci/copy-ns clj-manifold3d.math (sci/create-ns 'clj-manifold3d.math)) runtime-api/math-functions)}}))
 
 (defn describe [value]
   (cond
@@ -74,15 +76,21 @@
         (.postMessage js/self message #js [(.-buffer copy)]))
       (.postMessage js/self message))))
 
-(defn evaluate! [event]
+(defn evaluate-request! [event]
   (let [{:keys [id namespace documents blocks target selection all]} (js->clj (.-data event) :keywordize-keys true)
-        sources (into {} (map (juxt :namespace doc/source) documents))
+        document (first (filter #(= namespace (:namespace %)) documents))
+        ;; Only parse/load documents actually required by this namespace. An
+        ;; unfinished header in an unrelated split must not block evaluation.
+        sources (into {} (map (fn [d] [(:namespace d)
+                                       (-> (select-keys d [:namespace :ns-source])
+                                           (assoc :blocks (mapv #(select-keys % [:kind :source]) (:blocks d))))]) documents))
         dependencies (dissoc sources namespace)
         code-blocks (vec (filter #(= "code" (:kind %)) blocks))
         before (vec (take-while #(not= target (:id %)) code-blocks))
         old (get @sessions namespace)
         previous (history namespace)
-        reset? (or all (nil? old) (not= dependencies (:dependencies previous))
+        reset? (or all (nil? old) (not= (:ns-source document) (:ns-source previous))
+                   (not= dependencies (:dependencies previous))
                    ;; Editing earlier forms invalidates the namespace, but
                    ;; repeated evaluations in an unchanged document keep defs.
                    (some (fn [{:keys [id source]}]
@@ -94,14 +102,16 @@
                       {:ctx (context sources) :resources (atom [])}) old)
         output (atom "") current (atom target)]
     (swap! sessions assoc namespace session)
-    (when reset? (history! namespace {:dependencies dependencies :order (mapv :id code-blocks) :evaluated {}}))
+    (when reset? (history! namespace {:dependencies dependencies :ns-source (:ns-source document)
+                                      :order (mapv :id code-blocks) :evaluated {}}))
     (try
       (binding [rt/*resources* (:resources session)]
         (sci/binding [sci/ns (sci/create-ns (symbol namespace))
                       sci/print-newline true
                       sci/print-fn #(swap! output (fn [s] (subs (str s %) 0 (min 16000 (count (str s %))))))]
           (when reset?
-            (sci/eval-string* (:ctx session) (doc/source {:namespace namespace :blocks []})))
+            (reset! current (ns-form/header-id namespace))
+            (sci/eval-string* (:ctx session) (ns-form/assert-declaration! namespace (:ns-source document))))
           (doseq [b (if all code-blocks (concat before (filter #(= target (:id %)) code-blocks)))]
             (reset! current (:id b))
             (when (or all (= target (:id b)) (not (get-in (history namespace) [:evaluated (:id b) :complete?])))
@@ -110,6 +120,7 @@
                     entry (get-in (history namespace) [:evaluated (:id b)])
                     through (:through entry 0)
                     prefix-end (:topFrom selection 0)
+                    _ (ns-form/assert-body! (:source b))
                     _ (when (and selected? (not (:complete? entry)) (> prefix-end through))
                         (sci/eval-string* (:ctx session) (subs (:source b) through prefix-end)))
                     value (sci/eval-string* (:ctx session) (if selected? (:source selection) (:source b)))]
@@ -122,6 +133,13 @@
         ;; Failed initialization/evaluation may have partially mutated vars.
         (release! session) (swap! sessions dissoc namespace)
         (send! {:type "error" :id id :block @current :output @output :message (or (.-message error) (str error))})))))
+
+(defn evaluate! [event]
+  (try (evaluate-request! event)
+       (catch :default error
+         (let [{:keys [id namespace]} (js->clj (.-data event) :keywordize-keys true)]
+           (send! {:type "error" :id id :block (ns-form/header-id namespace)
+                   :message (or (.-message error) (str error))})))))
 
 (defn main []
   (js/importScripts "/wasm/manifold.js")

@@ -17,6 +17,22 @@
   (apply texture/geodesic-uv source :origin [0 0 0] :normal [1 1 1] :u-direction [-1 1 0]
          :size [3 2] :pixel-size 0.2 :outside-uv [-1 -1] :prop-index 3 options))
 
+(deftest procedural-images-export-identical-pixels
+  (let [png (texture/image 3 2 (fn [x y] [(/ x 2.0) y 0.25 1]))
+        shape (m/texture-all (m/cube 1 1 1) png)
+        bytes (support/scene-bytes (m/scene {:nodes [{:id :image :geometry shape}]}))
+        {:keys [width height pixel]} (support/glb-image bytes 0)]
+    (is (= [3 2] [width height]))
+    (is (= [0 0 64 255] (pixel 0 0)))
+    (is (= [128 255 64 255] (pixel 1 1)))
+    (is (= [255 255 64 255] (pixel 2 1))))
+  (doseq [[w h f] [[0 1 (constantly [0 0 0 1])]
+                    [2049 1 (constantly [0 0 0 1])]
+                    [1 1 (constantly [2 0 0 1])]
+                    [1 1 (constantly [0 0 0])]
+                    [1 1 (constantly [support/nan 0 0 1])]]]
+    (is (thrown? #?(:clj Exception :cljs js/Error) (texture/image w h f)))))
+
 (deftest planar-native-and-callback-uv-are-equivalent
   (let [source (m/cube 3 4 5)
         a (texture/planar-uv-native source :axes [:x :z] :scale [0.2 0.3] :offset [4 5])

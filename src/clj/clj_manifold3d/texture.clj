@@ -5,6 +5,7 @@
   interpolates those channels through boolean operations just like any other
   vertex property."
   (:require [clj-manifold3d.core :as manifold]
+            [clj-manifold3d.pixels :as pixels]
             [clojure.data.json :as json]
             [clojure.string :as string])
   (:import [manifold3d FloatVector MeshUtils]
@@ -12,6 +13,19 @@
            [java.nio ByteBuffer ByteOrder]
            [java.nio.charset StandardCharsets]
            [java.nio.file Files]))
+
+(defn image
+  "Generate PNG bytes synchronously. pixel-fn receives integer x,y (top-left origin)
+  and returns normalized sRGB [r g b alpha]. Dimensions must be 1..2048."
+  [width height pixel-fn]
+  (pixels/dimensions! width height)
+  (let [image (java.awt.image.BufferedImage. width height java.awt.image.BufferedImage/TYPE_INT_ARGB)]
+    (doseq [y (range height) x (range width)
+            :let [[r g b a] (pixels/rgba8 (pixel-fn x y))]]
+      (.setRGB image x y (unchecked-int (bit-or (bit-shift-left a 24) (bit-shift-left r 16) (bit-shift-left g 8) b))))
+    (with-open [out (java.io.ByteArrayOutputStream.)]
+      (javax.imageio.ImageIO/write image "png" out)
+      (.toByteArray out))))
 
 (def ^:private position-width 3)
 (def ^:private uv-width 2)

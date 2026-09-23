@@ -3,7 +3,7 @@
   (:refer-clojure :exclude [accessor])
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
-            [clojure.walk :as walk])
+            [clj-manifold3d.glb-assets :as assets])
   (:import [java.nio ByteBuffer ByteOrder]
            [java.nio.file Files]
            [java.nio.charset StandardCharsets]
@@ -118,42 +118,9 @@
             (when-not (and (every? #(< -1 % n) ids) (or (< c 2) (apply < ids))) (fail "Invalid sparse indices" {:index index}))
             (reduce (fn [out [i row]] (assoc out i row)) values (map vector ids rows))) values)))))
 
-(def ^:private tables ["bufferViews" "accessors" "images" "samplers" "textures" "materials" "meshes" "cameras" "nodes" "skins" "animations"])
 (defn append-document
-  "Append embedded core glTF assets, remapping all core references. Existing
-  animation clips survive. Extensions with unknown index semantics are rejected."
+  "Append embedded assets while retaining all core glTF references."
   [a b]
-  (let [ad (:gltf a) bd (:gltf b)
-        extensions (set (concat (get bd "extensionsUsed") (get bd "extensionsRequired")))]
-    (when (seq (remove #{"KHR_materials_unlit" "KHR_texture_transform"} extensions))
-      (fail "Cannot append extensions with unknown reference semantics" {:extensions extensions}))
-    (let [offsets (zipmap tables (map #(count (get ad % [])) tables))
-          binary (pad (:binary a) 0) base (alength ^bytes binary)
-          shift (fn [obj key table] (if (contains? obj key) (update obj key + (offsets table)) obj))
-          refs (fn [xs table] (mapv #(+ % (offsets table)) xs))
-          attributes (fn [attrs] (into {} (map (fn [[k v]] [k (+ v (offsets "accessors"))]) attrs)))
-          material (fn [m] (walk/postwalk
-                             (fn [x] (if (map? x)
-                                       (into {} (map (fn [[k v]]
-                                                       [k (if (and (string? k) (.endsWith ^String k "Texture") (map? v) (contains? v "index"))
-                                                            (update v "index" + (offsets "textures")) v)]) x)) x)) m))
-          convert {"bufferViews" #(-> % (assoc "buffer" 0) (update "byteOffset" (fnil + 0) base))
-                   "accessors" #(cond-> (shift % "bufferView" "bufferViews")
-                                  (get % "sparse") (update "sparse" (fn [s] (-> s (update "indices" shift "bufferView" "bufferViews") (update "values" shift "bufferView" "bufferViews")))))
-                   "images" #(shift % "bufferView" "bufferViews")
-                   "textures" #(-> % (shift "source" "images") (shift "sampler" "samplers"))
-                   "materials" material
-                   "meshes" #(update % "primitives" (fn [ps] (mapv (fn [p] (cond-> (-> p (update "attributes" attributes) (shift "indices" "accessors") (shift "material" "materials"))
-                                                                             (get p "targets") (update "targets" (fn [ts] (mapv attributes ts))))) ps)))
-                   "nodes" #(cond-> (-> % (shift "mesh" "meshes") (shift "camera" "cameras") (shift "skin" "skins"))
-                              (get % "children") (update "children" refs "nodes"))
-                   "skins" #(-> % (update "joints" refs "nodes") (shift "skeleton" "nodes") (shift "inverseBindMatrices" "accessors"))
-                   "animations" #(-> % (update "samplers" (fn [ss] (mapv (fn [s] (-> s (shift "input" "accessors") (shift "output" "accessors"))) ss)))
-                                      (update "channels" (fn [cs] (mapv (fn [c] (update c "target" shift "node" "nodes")) cs))))}
-          out (reduce (fn [d table] (if (seq (get bd table)) (update d table (fnil into []) (mapv (get convert table identity) (get bd table))) d)) ad tables)
-          scene-index (get ad "scene" 0)
-          out (if (seq (get out "scenes")) out (assoc out "scenes" [{"nodes" []}] "scene" 0))
-          roots (get-in bd ["scenes" (get bd "scene" 0) "nodes"] [])
-          out (update-in out ["scenes" scene-index "nodes"] (fnil into []) (refs roots "nodes"))
-          out (reduce (fn [d k] (let [v (vec (distinct (concat (get ad k) (get bd k))))] (if (seq v) (assoc d k v) d))) out ["extensionsUsed" "extensionsRequired"])]
-      (document out (concat-bytes binary (:binary b))))))
+  (let [binary (pad (:binary a) 0)]
+    (document (assets/append-gltf (:gltf a) (:gltf b) (alength ^bytes binary))
+              (concat-bytes binary (:binary b)))))

@@ -16,7 +16,8 @@
 (defn texture
   "Append an image layer, generating native UVs. Returns a native Model.
   Image is PNG/JPEG bytes or a filename. :mapping is :geodesic (requires
-  :origin and :size) or :planar. Layers use source-over with :opacity [0,1]."
+  :origin and :size), :planar, :box or :unwrap. See texture-all for whole-surface
+  mapping options. Layers use source-over with :opacity [0,1]."
   [object image & {:as opts}]
   (let [config (options/texture-options opts) image (image-bytes image)
         vec3 #(DoubleVec3. (nth % 0) (nth % 1) (nth % 2))]
@@ -31,6 +32,8 @@
       (.axisU p (first (config "axes"))) (.axisV p (second (config "axes")))
       (.scaleU p (first (config "scale"))) (.scaleV p (second (config "scale")))
       (.offsetU p (first (config "offset"))) (.offsetV p (second (config "offset")))
+      (when (= "unwrap" (config "mapping"))
+        (.seamAngle p (config "seamAngle")) (.padding p (config "padding")) (.pack p (config "pack")))
       (.depthScale p (config "depthScale")) (.depthOffset p (config "depthOffset"))
       (.depthFade p (config "depthFade")) (.step p (= "step" (config "depthBoundary")))
       (when-let [values (config "depthValues")]
@@ -38,6 +41,22 @@
       (when-let [depth (config "depthImage")]
         (let [data (image-bytes depth)] (.SetDepthImage p data (alength data))))
       (ModelIO/Texture (model object) image (alength image) p))))
+
+(defn texture-all
+  "Cover every face of a Manifold or Model with an image; return a new Model.
+  Default :mapping :box projects by each face's dominant normal. :size [w h]
+  (default [1 1]) is physical tile size, :origin [0 0 0] anchors the pattern,
+  :scale is a scalar or pair, and :offset [u v] shifts UVs. Images repeat.
+  Seams occur where projection directions change; this is not triplanar blending.
+
+  :mapping :unwrap cuts and flattens the mesh into an image atlas. :seam-angle
+  defaults to 45 degrees, :padding to 0.01, :pack? to true. With :pack? false,
+  charts use model-unit UVs times uniform :scale, and the image repeats.
+  Packed charts share one image; this is not one seamless wrap of the image.
+  :mapping :planar is also supported (edge-on faces can have collapsed UVs).
+  :opacity and :name work as for texture; geometry and earlier layers survive."
+  [object image & {:as opts}]
+  (apply texture object image (mapcat identity (options/whole-surface-options opts))))
 (defn info [object]
   (let [^Model value (model object)]
     {:layers (.layerCount value) :images (.imageCount value) :surfaces (.surfaceCount value)}))

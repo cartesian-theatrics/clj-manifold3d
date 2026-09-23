@@ -1,4 +1,4 @@
-import {EditorState, Compartment, Prec} from '@codemirror/state';
+import {EditorState, Compartment, Prec, Transaction} from '@codemirror/state';
 import {EditorView, keymap, drawSelection, highlightActiveLine} from '@codemirror/view';
 import {defaultKeymap, history, historyKeymap, indentWithTab, isolateHistory} from '@codemirror/commands';
 import {HighlightStyle, bracketMatching, indentOnInput, indentRange, indentUnit, ensureSyntaxTree, syntaxHighlighting, syntaxTree} from '@codemirror/language';
@@ -125,17 +125,41 @@ const highlighting=HighlightStyle.define([
   {tag:tags.invalid,textDecoration:'underline wavy #c35142'}
 ]);
 
+// Trim unchanged context from a literal edit before dispatching it. This keeps
+// selections, decorations and unaffected syntax nodes in their original place.
+export function textChange(before,after,offset=0) {
+  let from=0,endBefore=before.length,endAfter=after.length;
+  while(from<endBefore&&from<endAfter&&before[from]===after[from])from++;
+  while(endBefore>from&&endAfter>from&&before[endBefore-1]===after[endAfter-1]){endBefore--;endAfter--;}
+  return {from:offset+from,to:offset+endBefore,insert:after.slice(from,endAfter)};
+}
+function patchChange(source,{before,after}) {
+  const at=source.indexOf(before);
+  if(at<0||(!before&&source)|| (before&&source.indexOf(before,at+1)>=0))throw Error('Missing or ambiguous patch fragment');
+  return textChange(before,after,at);
+}
+function proseChange(view,next,preview=false) {
+  const before=view.state.doc,from=before.content.findDiffStart(next.content);
+  if(from==null)return;
+  let {a:to,b:end}=before.content.findDiffEnd(next.content);
+  const overlap=from-Math.min(to,end);
+  if(overlap>0){to+=overlap;end+=overlap;}
+  const tr=view.state.tr.replace(from,to,next.slice(from,end));
+  view.dispatch(preview?tr.setMeta('addToHistory',false):tr);
+}
+
 export function createCodeEditor(parent, options={}) {
-  const vimMode=new Compartment(); let remote=false;
-  const evaluate=(top=false)=>{const range=evaluationRange(view.state,top); if(range) options.onEvaluate?.({...range,source:view.state.sliceDoc(range.from,range.to)});return true;};
-  const split=()=>{options.onSplit?.(view.state.selection.main.head);return true;};
-  const command=name=> name==='form'?evaluate():name==='top'?evaluate(true):name==='split'?split():name==='block'?(options.onRun?.(),true):structural(view,name);
+  const vimMode=new Compartment(),previewMode=new Compartment(); let remote=false,previewState=null;
+  let previewEdits=[],previewChanges=null,finishedPreview=null;
+  const evaluate=(top=false)=>{if(previewState)return true;const range=evaluationRange(view.state,top); if(range) options.onEvaluate?.({...range,source:view.state.sliceDoc(range.from,range.to)});return true;};
+  const split=()=>{if(!previewState)options.onSplit?.(view.state.selection.main.head);return true;};
+  const command=name=> previewState?true:name==='form'?evaluate():name==='top'?evaluate(true):name==='split'?split():name==='block'?(options.onRun?.(),true):structural(view,name);
   const shortcuts=[
     {key:'Mod-Enter',run:()=>evaluate()}, {key:'Mod-e',run:()=>evaluate()},
     {key:'Mod-Shift-Enter',run:split},
     {key:'Mod-Shift-e',run:()=>evaluate(true)},
     {key:'Shift-Enter',run:()=>command('block')},
-    {key:'Mod-Alt-Enter',run:()=>{options.onRunAll?.();return true;}},
+    {key:'Mod-Alt-Enter',run:()=>{if(!previewState)options.onRunAll?.();return true;}},
     {key:'Ctrl-Alt-ArrowRight',run:v=>structural(v,'slurp-forward')},
     {key:'Ctrl-Alt-ArrowLeft',run:v=>structural(v,'barf-forward')},
     {key:'Ctrl-Alt-Shift-ArrowLeft',run:v=>structural(v,'slurp-backward')},
@@ -149,25 +173,41 @@ export function createCodeEditor(parent, options={}) {
       Vim.handleKey(cm,'<Esc>');
       event.preventDefault();return true;
     }})),
-    Prec.highest(keymap.of(shortcuts)), vimMode.of(options.vim?vim():[]),
+    Prec.highest(keymap.of(shortcuts)), vimMode.of(options.vim?vim():[]),previewMode.of([]),
+    EditorState.changeFilter.of(()=>!previewState||remote),
     clojure(), history(), drawSelection(), highlightActiveLine(), indentOnInput(), indentUnit.of('  '), bracketMatching(),
     clojureLanguage.data.of({closeBrackets:{brackets:['(','[','{','"']}}),closeBrackets(),
     keymap.of([...closeBracketsKeymap,...defaultKeymap,...historyKeymap,indentWithTab]),
     syntaxHighlighting(highlighting), EditorView.lineWrapping,
     EditorView.theme({'&':{background:'transparent'},'&.cm-focused':{outline:'none'},'.cm-scroller':{fontFamily:'"SFMono-Regular",Consolas,monospace',fontSize:'13px',lineHeight:'1.8'},'.cm-content':{padding:'12px 0'},'.cm-line':{padding:'0 18px'},'.cm-activeLine':{background:'#62897608'},'.cm-matchingBracket':{background:'#a4c5b84d'}}),
-    EditorView.contentAttributes.of({'aria-label':'Clojure code',spellcheck:'false'}),
+    EditorView.contentAttributes.of({'aria-label':options.label||'Clojure code',spellcheck:'false'}),
     EditorView.domEventHandlers({focus:()=>{options.onFocus?.();return false;}}),
-    EditorView.updateListener.of(update=>{if(update.docChanged&&!remote) options.onChange?.(update.state.doc.toString());})
+    EditorView.updateListener.of(update=>{if(update.docChanged&&!remote){finishedPreview=null;options.onChange?.(update.state.doc.toString());}})
   ]})});
   return {getValue:()=>view.state.doc.toString(),
-    setValue(value){if(value!==view.state.doc.toString()){remote=true;try{view.dispatch({changes:{from:0,to:view.state.doc.length,insert:value}});}finally{remote=false;}}},
-    setVim(value){view.dispatch({effects:vimMode.reconfigure(value?vim():[])});},
+    setValue(value){remote=true;try{const current=view.state.doc.toString();if(value!==current){view.dispatch({changes:finishedPreview?.source===value&&finishedPreview.base===current?finishedPreview.changes:textChange(current,value),annotations:isolateHistory.of('full')});finishedPreview=null;}}finally{remote=false;}},
+    setPreview(value,patches=[]){
+      remote=true;
+      try{
+        if(value==null){if(previewState){finishedPreview={base:previewState.doc.toString(),source:view.state.doc.toString(),changes:previewChanges};const original=previewState;previewState=null;previewEdits=[];view.setState(original);}return;}
+        // Reconnect/revised request prefixes start from the saved original.
+        if(previewState&&(patches.length<previewEdits.length||previewEdits.some((e,i)=>e.before!==patches[i]?.before||e.after!==patches[i]?.after))){view.setState(previewState);previewState=null;previewEdits=[];}
+        if(!previewState){finishedPreview=null;previewState=view.state;previewChanges=view.state.changes([]);view.dispatch({effects:previewMode.reconfigure([EditorState.readOnly.of(true),EditorView.editable.of(false)])});}
+        for(const edit of patches.slice(previewEdits.length)){
+          const tr=view.state.update({changes:patchChange(view.state.doc.toString(),edit),annotations:Transaction.addToHistory.of(false)});
+          previewChanges=previewChanges.compose(tr.changes);view.update([tr]);
+        }
+        previewEdits=patches.slice();
+      }finally{remote=false;}
+    },
+    setVim(value){const effects=vimMode.reconfigure(value?vim():[]);if(previewState)previewState=previewState.update({effects}).state;view.dispatch({effects});},
     select(from,to=from){view.dispatch({selection:{anchor:from,head:to}});},
     command,focus:()=>view.focus(),destroy:()=>view.destroy()};
 }
 
 export function createProseEditor(parent, options={}) {
-  let remote=false;
+  let remote=false,previewState=null;
+  let canonical=options.value||'',previewSource=null,previewEdits=[];
   const commands={bold:toggleMark(schema.marks.strong),italic:toggleMark(schema.marks.em),
     code:toggleMark(schema.marks.code),heading:setBlockType(schema.nodes.heading,{level:2}),
     paragraph:setBlockType(schema.nodes.paragraph),list:wrapInList(schema.nodes.bullet_list),
@@ -177,7 +217,7 @@ export function createProseEditor(parent, options={}) {
       textblockTypeInputRule(/^(#{1,3})\s$/,schema.nodes.heading,m=>({level:m[1].length})),
       wrappingInputRule(/^\s*([-+*])\s$/,schema.nodes.bullet_list),
       wrappingInputRule(/^\s*>\s$/,schema.nodes.blockquote)]}),
-    proseKeymap({'Mod-Enter':()=>{options.onPrompt?.();return true;},
+    proseKeymap({'Mod-Enter':()=>{if(!previewState)options.onPrompt?.();return true;},
       'Mod-End':(state,dispatch)=>{dispatch(state.tr.setSelection(ProseSelection.atEnd(state.doc)).scrollIntoView());return true;},
       'Mod-Home':(state,dispatch)=>{dispatch(state.tr.setSelection(ProseSelection.atStart(state.doc)).scrollIntoView());return true;},
       'Mod-b':commands.bold,'Mod-i':commands.italic,'Mod-`':commands.code,
@@ -186,10 +226,24 @@ export function createProseEditor(parent, options={}) {
       'Tab':sinkListItem(schema.nodes.list_item),'Shift-Tab':liftListItem(schema.nodes.list_item)}),proseKeymap(baseKeymap)]}),
     attributes:{class:'journal-prose',role:'textbox','aria-label':'Journal prose'},
     handleDOMEvents:{focus:()=>{options.onFocus?.();return false;}},
-    dispatchTransaction(tr){view.updateState(view.state.apply(tr));if(tr.docChanged&&!remote) options.onChange?.(defaultMarkdownSerializer.serialize(view.state.doc));}
+    dispatchTransaction(tr){if(previewState&&!remote&&tr.docChanged)return;view.updateState(view.state.apply(tr));if(tr.docChanged&&!remote){canonical=defaultMarkdownSerializer.serialize(view.state.doc);options.onChange?.(canonical);}}
   });
-  return {command(name){view.focus();return commands[name]?.(view.state,view.dispatch,view);},
+  return {command(name){if(previewState)return false;view.focus();return commands[name]?.(view.state,view.dispatch,view);},
     getValue:()=>defaultMarkdownSerializer.serialize(view.state.doc),
-    setValue(value){if(value!==defaultMarkdownSerializer.serialize(view.state.doc)){remote=true;try{const next=defaultMarkdownParser.parse(value);view.dispatch(view.state.tr.replaceWith(0,view.state.doc.content.size,next.content));}finally{remote=false;}}},
+    setValue(value){remote=true;try{canonical=value;proseChange(view,defaultMarkdownParser.parse(value));}finally{remote=false;}},
+    setPreview(value,patches=[]){
+      remote=true;
+      try{
+        if(value==null){if(previewState){view.updateState(previewState);previewState=null;previewEdits=[];view.setProps({editable:()=>true});}return;}
+        if(previewState&&(patches.length<previewEdits.length||previewEdits.some((e,i)=>e.before!==patches[i]?.before||e.after!==patches[i]?.after))){view.updateState(previewState);previewState=null;previewEdits=[];}
+        if(!previewState){previewState=view.state;previewSource=canonical;view.setProps({editable:()=>false});}
+        for(const edit of patches.slice(previewEdits.length)){
+          const {from,to,insert}=patchChange(previewSource,edit);
+          previewSource=previewSource.slice(0,from)+insert+previewSource.slice(to);
+          proseChange(view,defaultMarkdownParser.parse(previewSource),true);
+        }
+        previewEdits=patches.slice();
+      }finally{remote=false;}
+    },
     focus:()=>view.focus(),destroy:()=>view.destroy()};
 }

@@ -1,7 +1,9 @@
 (ns clj-manifold3d.animation
   "Immutable animation tracks and GLB scenes for ClojureScript."
   (:require [clj-manifold3d.runtime :as rt]
-            [clj-manifold3d.glb :as glb]))
+            [clj-manifold3d.model :as model]
+            [clj-manifold3d.glb :as glb]
+            [clj-manifold3d.scene-features :as features]))
 
 (defn- finite-number? [x]
   (and (number? x) (js/Number.isFinite x)))
@@ -105,6 +107,8 @@
   (= scene-type (:model/type value)))
 
 (defn- normalize-node [index node]
+  (features/validate-node! node)
+  (features/validate-material! (:material node))
   (let [id (or (:id node) (:name node))
         children (vec (or (:children node) []))
         transform (merge (select-keys node [:translation :rotation :scale])
@@ -114,7 +118,7 @@
     (doseq [[key size] [[:translation 3] [:rotation 4] [:scale 3]]]
       (when (contains? transform key)
         (assert-vector! (str ":transform/" (name key)) (get transform key) size)))
-    (assoc (select-keys node [:name :geometry :extras])
+    (assoc (select-keys node [:name :geometry :material :extras :light :camera])
            :id id
            :children children
            :transform transform)))
@@ -153,9 +157,11 @@
   "Create a validated animation scene.
 
   A scene is a data-only map with `:nodes` and optional `:animations`.
-  Nodes have stable `:id` values, optional Manifold `:geometry`, a nested
+  Nodes have stable `:id` values, optional Manifold or Model `:geometry`, a nested
   `:transform` map, and optional `:children` IDs. Transform-only nodes are
-  useful as pivots. Animation channels target a node and one transform path."
+  useful as pivots. Animation channels target a node and one transform path.
+  GLB export retains colors and embedded textures. Optional :material accepts
+  :color [r g b a], :roughness and :metalness, each component in [0,1]."
   [{:keys [name nodes animations extras]}]
   (let [nodes (vec (or nodes []))
         nodes (mapv normalize-node (range) nodes)
@@ -182,25 +188,9 @@
 
 (def ^:private align4 glb/align4)
 (def ^:private floats->bytes glb/floats->bytes)
-(def ^:private ints->bytes glb/ints->bytes)
-(def ^:private mesh-data glb/mesh-data)
 (def ^:private empty-glb-state glb/empty-state)
 (def ^:private add-segment glb/add-segment)
 (def ^:private add-accessor glb/add-accessor)
-
-(defn- add-geometry [state geometry]
-  (let [{:keys [positions indices min max]} geometry
-        [state position-view] (add-segment state (floats->bytes positions) 34962)
-        [state position-accessor] (add-accessor state position-view 5126
-                                                 (/ (count positions) 3) "VEC3"
-                                                 min max)
-        [state index-view] (add-segment state (ints->bytes indices) 34963)
-        [state index-accessor] (add-accessor state index-view 5125
-                                              (count indices) "SCALAR" nil nil)]
-    [state {"primitives"
-            [{"attributes" {"POSITION" position-accessor}
-              "indices" index-accessor
-              "mode" 4}]}]))
 
 (defn- channel-values [path track]
   (vec (mapcat path track)))
@@ -261,52 +251,66 @@
   (let [nodes (:nodes scene)]
     (when (empty? nodes)
       (throw (ex-info "An animation scene requires at least one node" {})))
-    (let [[state meshes mesh-indices]
-          (reduce (fn [[state meshes mesh-indices] node]
-                    (if-let [geometry (:geometry node)]
-                      (let [[state mesh] (add-geometry state (mesh-data geometry))
-                            mesh-index (count meshes)]
-                        [state
-                         (conj meshes mesh)
-                         (assoc mesh-indices (:id node) mesh-index)])
-                      [state meshes mesh-indices]))
-                  [(empty-glb-state) [] {}]
-                  nodes)
-          node-indices (into {} (map-indexed (fn [index node]
+    (let [node-indices (into {} (map-indexed (fn [index node]
                                                [(:id node) index])
                                              nodes))
           gltf-nodes (mapv (fn [node]
-                             (node-transform node (get mesh-indices (:id node))
+                             (node-transform node nil
                                              node-indices))
                            nodes)
           [state animations]
           (reduce (fn [[state animations] animation]
                     (let [[state animation] (add-animation state animation node-indices)]
                       [state (conj animations animation)]))
-                  [state []]
+                  [(empty-glb-state) []]
                   (:animations scene))
           bin-length (align4 (:length state))
           gltf (cond-> {"asset" {"version" "2.0"
                                   "generator" "clj-manifold3d.animation"}
                         "scene" 0
-                        "scenes" [{"name" (:name scene)
-                                   "nodes" (mapv node-indices (:roots scene))}]
+                        "scenes" [(cond-> {"name" (:name scene)
+                                           "nodes" (mapv node-indices (:roots scene))}
+                                    (:extras scene) (assoc "extras" (:extras scene)))]
                         "nodes" gltf-nodes
-                        "meshes" meshes
                         "buffers" [{"byteLength" bin-length}]
                         "bufferViews" (:views state)
                         "accessors" (:accessors state)}
                  (seq animations) (assoc "animations" animations))]
-      {:gltf gltf
+      {:gltf (features/decorate-nodes gltf nodes)
        :segments (:segments state)
        :bin-length bin-length})))
 
+(defn- appearance-assets [geometry material]
+  (let [asset (glb/read-glb (model/export-model (model/model geometry) nil))
+        asset (-> asset (assoc-in [:gltf "nodes"] [])
+                  (assoc-in [:gltf "scenes"] [{"nodes" []}]))]
+    (update asset :gltf features/apply-material material)))
+
+(defn scene-document
+  "Compile a scene to an immutable GLB document, sharing repeated geometry.
+  Each node's Model owns its colors, UVs, normals, and embedded images."
+  [value]
+  (if (glb/document? value) value
+    (let [value (scene value)
+          {:keys [gltf segments bin-length]} (scene->gltf value)
+          base (glb/document gltf (glb/join-segments segments bin-length))]
+      (first
+       (reduce (fn [[doc cache] [index {:keys [geometry material]}]]
+                 (if-not geometry [doc cache]
+                   (let [key [geometry material]
+                         cached (get cache key)
+                         mesh-index (or cached (count (get-in doc [:gltf "meshes"])))
+                         doc (if cached doc (glb/append-document doc (appearance-assets geometry material)))]
+                     [(assoc-in doc [:gltf "nodes" index "mesh"] mesh-index)
+                      (assoc cache key mesh-index)])))
+               [base {}] (map-indexed vector (:nodes value)))))))
 
 (defn scene-bytes
-  "Encode a scene as a self-contained GLB Uint8Array."
+  "Encode a scene as GLB, retaining colors, UVs, materials and embedded images."
   [scene]
-  (let [{:keys [gltf segments bin-length]} (scene->gltf scene)]
-    (glb/encode gltf segments bin-length)))
+  (let [{:keys [gltf binary]} (scene-document scene)
+        gltf (assoc gltf "buffers" [{"byteLength" (alength binary)}])]
+    (glb/encode gltf [binary] (alength binary))))
 
 (defn export-scene
   "Write/download GLB; pass nil as filename to return bytes."

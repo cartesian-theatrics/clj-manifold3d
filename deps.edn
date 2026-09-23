@@ -1,5 +1,6 @@
 {:paths ["src/clj" "src/cljc" "src/cljs"]
- :deps {org.clojure/data.json {:mvn/version "2.4.0"}}
+ :deps {org.clojure/data.json {:mvn/version "2.4.0"}
+        borkdude/edamame {:mvn/version "1.4.32"}}
  :aliases
  {:test-shared
   {:extra-paths ["test/shared"]

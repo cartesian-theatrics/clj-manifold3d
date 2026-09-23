@@ -650,6 +650,61 @@ those operations before texturing for now.
 
 See `examples/layered_model.clj` for two decals plus a textured boolean cutter.
 
+### Whole-surface textures
+
+`texture-all` covers every face, including the backs and insides of a solid.
+It accepts either a Manifold or a Model and returns an immutable Model, with
+the same threading, layers, booleans, colors and GLB export as `texture`:
+
+```clojure
+(-> (m/sphere 15 64)
+    (m/texture-all "resources/images/colored-manifold.png" :size [5 5])
+    (m/export-model "target/whole-sphere.glb"))
+```
+
+In ClojureScript pass PNG/JPEG bytes (for example `texture/bake` output) instead
+of a filename. Both runtimes use the same native C++ implementation; neither
+walks the vertices in Clojure. Build the updated sibling Java bindings for the
+JVM (`:clj-dev` already points to the local JAR), or run `npm run build:wasm`
+for CLJS. A JVM that already loaded the older native bindings needs a fresh
+process to use the new modes; an existing REPL can remain running.
+
+The default `:mapping :box` selects a projection for each face from its dominant
+normal. Unlike a single planar projection, no nondegenerate face is edge-on to
+its texture. `:size [width height]` is physical tile size (default `[1 1]`),
+`:origin [0 0 0]` anchors the pattern, `:scale` multiplies UVs (scalar or pair),
+and `:offset [u v]` shifts them. Negative scales mirror the pattern. Images
+repeat on all faces. UV seams split property vertices, not the solid's physical
+connectivity; existing colors, UVs and boolean provenance are retained.
+**This is box projection, not seamless triplanar blending:** seams are visible
+where the selected projection changes, especially on curved surfaces.
+
+For an image authored as an atlas, use `:mapping :unwrap`. This exposes the
+existing native halfedge/least-squares conformal solver through the Model API:
+
+```clojure
+(m/texture-all shape atlas-image :mapping :unwrap
+               :seam-angle 45 :padding 0.01 :pack? true)
+```
+
+Packed charts occupy `[0,1]` and the image is clamped. They use separate parts
+of one image, **not a separate complete copy of the image on each face**.
+Packing normalizes chart scale. With `:pack? false`, each chart instead uses
+model-unit UVs multiplied by a positive uniform `:scale`, and the image repeats.
+Unwrapping introduces cuts and distortion; it is not a seamless wrap-once
+parameterization. `:mapping :planar` is also available, with the existing
+edge-on limitation. `:opacity` and `:name` apply in every mode.
+
+You can append a local `m/texture` decal (including depth) over a whole-surface
+material, or append `texture-all` over earlier layers. Whole-surface mappings
+do not displace geometry; depth remains a geodesic decal option. `m/texture`
+still defaults to the original local `:geodesic` behavior; it also accepts
+explicit `:mapping :box` and `:mapping :unwrap`. A newly exposed boolean cut
+uses the cutter's own appearance, so texture both operands to texture the cut.
+
+See `examples/whole_surface_texture.clj` for a tiled sphere, torus and textured
+boolean cavity exported together in one GLB.
+
 ### Low-level UV channels
 
 On the JVM, UV coordinates can be attached as MeshGL vertex properties. Manifold
@@ -970,6 +1025,64 @@ f3d --animation-time 1 pivot-arm.glb
 
 ## JVM scene assembly and spatial queries
 
+### Authored lighting, cameras and glowing materials
+
+On both CLJ and CLJS, scene nodes can carry `:light` or `:camera` as well as
+geometry. These survive GLB export and scene append; their node transforms can
+be animated using the ordinary animation channels.
+
+```clojure
+(m/scene
+  {:nodes [{:id :lamp :translation [0 -10 8]
+            :light {:type :point :color [1 0.7 0.4] :intensity 500 :range 50}}
+           {:id :camera :translation [0 -25 15]
+            :camera {:yfov 0.7 :znear 0.1 :zfar 1000}}
+           {:id :glowing-ball :geometry (m/sphere 1 24)
+            :material {:emissive [1 0.4 0.1] :emissive-strength 3}}]})
+```
+
+Lights use glTF `KHR_lights_punctual`: `:point`, `:spot` or `:directional`.
+Point/spot intensity is candela; directional intensity is lux. Positive
+`:range` applies only to point/spot lights. Spots accept `:inner-cone` and
+`:outer-cone` in radians, with `0 <= inner < outer <= pi/2`. Cameras and directed
+lights face local **-Z**; camera up is local +Y. Set node rotations explicitly.
+Perspective cameras require `:yfov` (radians) and positive `:znear`; `:zfar`
+and `:aspect-ratio` are optional. Selecting a camera is up to the viewer.
+
+Materials accept linear `:emissive [r g b]` in `[0,1]`; optional nonnegative
+`:emissive-strength` uses `KHR_materials_emissive_strength`. Emissive surfaces
+do not automatically illuminate neighbors. Bloom, shadows, environment maps
+and water reflections are rendering features, not baked into the GLB.
+
+### Castle night scene
+
+`examples/fairytale_castle_night.clj` builds a stone-textured castle, arched
+bridge, landscape, forest and stars, six authored lights, an animated camera,
+fireworks and a sweeping sparkle trail. Its ten-second clip uses real Manifold
+geometry with GLB transform animation; no per-frame CSG or external meshes.
+The landscape uses `m/surface` height fields for ridges, uneven snowcaps,
+foothills and shorelines. Trees are ray-seated on the ground; the nine-span
+bridge meets a supported, level road cut into the bank. The static castle's
+bridge still defaults to four spans (`:bridge-spans` configures the count).
+The repeating stone PNG is generated procedurally and embedded via
+`m/texture-all`. Both castle builds subtract window openings after assembling
+the masonry/trim, then ray-check 30 exposed window samples. The preview uses
+24-bit depth attachments and a suitable near plane to avoid glass/wall z-fighting.
+
+```sh
+npm run build:castle
+npm run serve:castle    # http://localhost:8092/
+npm run test:castle    # headless browser + exported-asset checks
+```
+
+The standalone preview uses the exported lights/camera/animation, adding HDR
+bloom and rippled planar reflections. It offers scrubbing, pause (Space),
+orbit mode, fullscreen (F), and GLB download. It does not modify the journal,
+Try it! app, user documents or REPL. The GLB opens in other capable viewers,
+but their lighting and postprocessing may look different.
+
+### Assembly operations
+
 `core/scene`, `core/export-scene`, and `core/export-model` accept scenes containing
 Manifolds or native Models. Each node retains its Model's colors, normals, UVs,
 and embedded images. Identical geometry/material pairs share a glTF mesh.
@@ -1117,25 +1230,215 @@ conflicting writes instead of silently overwriting another window's work.
 
 Evaluation currently runs in browser SCI with real WASM geometry, **not on the
 JVM server** and not through a full ClojureScript compiler. Documents can
-`require` other documents; code blocks share a namespace session. Changed code
-or dependencies invalidate it at the next evaluation. Stop/30-second timeout
+require other documents; code blocks share a namespace session. Each document
+has one visible, editable `(ns … (:require …))` header above its panels. Add
+library and document imports there, not in code panels. There are no hidden
+`m`, `texture`, `animation`, or `math` aliases; new documents explicitly require
+core as `m`. The header supports the same syntax highlighting, auto-parens,
+Vim and slurp/barf as code. It cannot be deleted or split. Changes to imports,
+code or dependencies invalidate the session at the next evaluation. Existing
+documents migrate their implicit aliases and literal standalone requires into
+the header without reformatting modeling code. Stop/30-second timeout
 restarts the worker. JVM/JS interop and arbitrary dependency loading are not
-exposed. The server binds to loopback and does not execute submitted code.
+exposed. The server binds to loopback. Manual evaluation runs in the page's
+worker; generated code is checked in a disposable headless browser worker,
+never in the backend JVM.
 Original prototype databases/files under `data/maria-*` are left untouched.
 The replaced prototype source is archived in
 `target/journal-prototype-before-replacement.tar` for recovery.
+
+Every code, prose, and thinking panel has **Hide/Show** and **Delete** controls.
+Hide collapses the panel (including its result) to a compact header; it does
+not remove code from evaluation or the namespace file. Visibility is shared
+across splits and saved with the document. Use Ctrl+Alt+H to toggle the focused
+panel, or Ctrl+Alt+Backspace to delete it. Deleting a thinking panel stops an
+active request and prevents late output from reappearing; deleting the final
+panel leaves an empty prose editor so the journal stays editable.
+Use **Undo delete** in the document header or **Ctrl+Alt+Z** to restore a deleted
+panel. The last ten deletions per document survive reloads. Undo preserves
+intervening edits and panel settings, but does not resurrect expired render
+results or restart a deleted Codex request. Editor Ctrl/Cmd+Z still undoes text.
+
+Model previews have a **Tools** toggle (closed by default). Enable **Measure**
+and click two points on the model for their straight-line distance in model
+units; animation pauses while picking. Clear removes the markers. The **Floor
+grid** is on by default and can be switched off. Camera position, orbit target,
+and grid preference are stored per panel in DataScript/Datahike and survive
+re-evaluation, offscreen viewer suspension, and page reload. **Fit** recenters
+the camera. Measurements are cleared when new geometry replaces the result.
+
+**Pop out** (Ctrl+Alt+O) moves the live model and its controls to a floating
+window. Where supported, [Document Picture-in-Picture](https://developer.chrome.com/docs/web-platform/document-picture-in-picture)
+keeps it always on top, with one such window per journal tab at a time. Other
+browsers get an ordinary window with an explicit notice that pinning must be
+done through the operating system's window manager. Re-evaluations update the
+same window. Closing it or choosing **Return to journal** restores the panel;
+deleting the owning panel or closing the journal closes its pop-out.
+**Fullscreen** (Ctrl+Alt+M, Esc to exit) expands the viewer in place, preserving
+camera position and controls. Return a detached viewer to the journal first.
+Window/fullscreen facts are per-pane DataScript state, not saved preferences.
+
+Open **American flag · surface UV** (`journal.flag-uv`) for a runnable example
+of colored flag geometry baked into an image, native surface UVs on a sphere,
+and a wavy depth grid. Its downloadable GLB embeds the texture and UVs.
+
+Open **Castle · night scene** (`journal.castle-night`) and choose **Run page**
+for the complete textured, animated castle and `m/surface` landscape. Its
+visible `ns` header requires **Castle · architecture**; both documents contain
+editable implementation code seeded from the canonical files in `examples/`.
+Existing edits are never overwritten on startup. The first build is substantial.
+The viewer uses the authored camera and lights; the separate castle preview
+additionally provides cinematic bloom and water reflections.
+
+The example uses portable `texture/image` (a synchronous sRGB RGBA pixel
+function returning PNG bytes), `m/as-original`, and `m/with-spatial-index`.
+WASM spatial queries use the same native BVH as the JVM: `ray-cast`,
+`closest-point`, `contains-point?`, and `overlap?`. `with-spatial-index` releases
+its snapshot even when the callback throws. Run `npm run test:journal:castle`
+for the full advanced-optimized browser evaluation and GLB regression test.
 
 #### Prompting Codex from prose
 
 Write a request in any prose block, then choose **Prompt Codex** or press
 Ctrl/Cmd+Enter while editing that prose. A Thinking panel appears immediately
-underneath it. When the response completes, editable prose/code panels are
-inserted below the Thinking panel. Generated code is **not automatically run**;
-review it and use the normal Run action to render its result.
+underneath it. Codex receives the selected panel IDs and content,
+including selected responses below the prompt, plus the previous completed
+prompt at that panel. Revisions update the relevant panels in place; new topics,
+additional examples, and explicit alternatives insert new panels below Thinking.
+A new prose prompt can also ask to revise an earlier panel. One response can
+mix updates and additions; unchanged panels are left alone. Editing prose alone
+does not start a request: choose Prompt Codex again when ready.
+
+Choose **Context…** on a prose panel (Ctrl+Alt+K while focused on prose) to set
+that prompt's context. Scope can be the document, its heading-defined section,
+or selected panels only. Each panel can explicitly be a **Target** (editable),
+**Read-only** reference, or **Excluded**. The active prompt is always read-only.
+Badges in the journal show roles for the prompt you are configuring. Roles are
+independent of Hide/Show and persist per prompt in Datahike/DataScript. The host
+rejects patches to references, excluded panels, and dependencies.
+**Allow Codex to create new namespaces** is an explicit per-prompt permission,
+off by default. When enabled, the context includes existing namespace names
+(not their contents) to avoid collisions. `create` edits group code/prose panels
+into new documents, which are saved as ordinary `.clj` namespace files and can
+be required from other journals. The host refuses existing/library namespaces,
+unsafe paths, and namespace names that map to the same file.
+New documents and edits to the referring document are saved in one Datahike
+transaction, so a namespace collision cannot partially commit a save batch.
+
+**What will be sent?** previews the exact app-provided model input and output
+and tool schemas without calling Codex. It shows inclusion reasons and a rough token
+estimate (characters / 4, not a tokenizer count; Codex's built-in instructions
+and protocol overhead are not included). Sending after inspection checks that
+the context has not changed. The backend stores the actual input with the
+request. Nothing is silently truncated to meet the request-size limit.
+
+Pinned workspace instructions provide defaults such as units and fabrication
+constraints. Document instructions can extend them, with document-specific
+requirements taking precedence, or replace workspace instructions entirely.
+These instructions are context, not executable namespace source.
+
+Namespace-aware lookup adds referenced definitions from other journal documents
+and the journal's ClojureScript core/texture/animation/model/mesh-io APIs.
+It understands ordinary require aliases, named refers, fully qualified symbols,
+and common lexical bindings. Signatures, literal constants, and docstrings are
+included by default. **Include implementation** expands a specific definition;
+you can also select implementations globally or turn automatic lookup off.
+Expanded implementations include their discoverable dependencies, with cycle
+detection and a visible 100-definition limit. External private vars, unrelated
+definitions, and explicitly excluded panels are not automatically included.
+Lookup only parses code; it never evaluates forms or loads namespaces. Macro-
+generated references may need manual reference selection. Imports belong in
+the document's namespace header, including imports added by generated deltas.
+
+Independently, Codex can discover supported library APIs using three read-only
+tools: `journal_api_search`, `journal_api_read` (documentation and optional
+implementation), and `journal_api_examples` (trusted built-in examples). It
+does not need existing references or manual documentation expansion. The
+catalog is frozen in Datahike per request and matches the SCI exposure list;
+these tools never inspect unrelated user documents or evaluate code. Calls and
+results appear under **API lookups** in Thinking. There is a 32-call budget,
+40k-character result limit and 200k-character cumulative result budget.
+
+The namespace header is a target by default, even for section/selected scope;
+you can make it read-only or exclude it in Context. Generated imports are
+ordinary minimal patches to that header, applied in place. A targeted namespace
+header is locked until the request finishes or you choose Stop & edit.
+Animated scenes preserve vertex colors and native Model materials, UVs, normals
+and embedded textures on both JVM and ClojureScript. Place the colored Manifold
+or textured Model in a node's `:geometry`; optional `:material` accepts `:color`,
+`:roughness` and `:metalness`. Repeated geometry/material pairs share their GLB
+assets. The discovery tools report these capabilities; lighting still comes
+from the viewer rather than per-scene light constructors.
+
+Thinking reports how many panels were updated or added. Updates preserve panel
+identity, position, and visibility. Completed valid edits are saved immediately
+to the shared document and its `.clj` file. The host then executes the selected
+notebook in a disposable instance of the actual
+SCI/WASM worker, including geometry export. Errors and printed output go back
+to Codex for up to two repair attempts against the **current scratchpad**.
+Repairs send only additional deltas, never replay earlier edits. Failed code
+stays visible in its panel while being repaired; it is not executed in the
+user's existing worker session.
+
+Successful results appear automatically in their code panels: GLB viewers for
+models/scenes, SVG previews for cross-sections, and values/printed output.
+Results and binary artifacts are stored in Datahike and restored after reload
+when their source still matches; no second execution or manual Run is needed.
+Thinking's **Evaluation & repairs** disclosure shows the checks. Runtime success
+does not prove that a model visually matches the request.
+
+Verification requires Node and Playwright Chromium on the server (`npx playwright
+install chromium`); set `JOURNAL_NODE_BIN` if Node is not on its PATH. It permits
+only the worker/WASM assets, not journal APIs or arbitrary network access. Each
+namespace has a 30-second execution limit, with 60 seconds for the entire
+verification process and a 16 MiB rendered-result limit. Stop also terminates
+verification. The evaluator includes selected context and referenced definition
+implementations, not unrelated documents or explicitly excluded panels.
+
+While Codex writes, additions populate incrementally below Thinking. Existing
+panels receive **literal deltas**, not regenerated panel text. Each `patch`
+contains a panel ID, a small unique `before` fragment, and its replacement
+`after`. Multiple patches can address the same panel, in order; insertions use
+a short unchanged anchor, and deletions use an empty `after`. Unchanged code,
+comments, and whitespace are not sent back by the model. Missing or ambiguous
+matches are rejected, never guessed. New-panel `insert` operations use null
+`target`/`before` and place the new text in `after`.
+For a missing or ambiguous patch fragment, the host sends the exact failing
+panel source and diagnostic back in the same isolated Codex thread, for at most
+two correction attempts. The feedback contains current panel sources and stable
+IDs, including newly added panels. The host keeps an append-only operation log
+and rejects attempts to rewind completed edits. Original context permissions
+still apply. Rejected output, the latest repair input, and attempt count
+are retained with the request; `/api/codex/requests/:id/inspection` exposes them.
+
+Each completed patch object is applied immediately **inside the existing code
+or rich-text editor** while the remaining operations are still arriving, with syntax
+highlighting/formatting and an “Editing live…” indicator, not a secondary panel.
+Target code panels and imports are locked from request submission through
+evaluation and repair. The server rejects competing writes/deletes with HTTP
+423 and rejects overlapping Codex sessions. You can still edit other prose
+or untargeted panels; incoming edits merge with unrelated unsaved changes.
+**Stop & edit** cancels generation, keeps completed edits, and hands the panel
+back to you. Cancel, failure, and server restart also release ownership without
+discarding completed work. Only an unfinished streamed operation is discarded.
+A code editing session is one undoable editor action, including after Stop.
+Use editor Undo if you explicitly want to revert it.
+
+Completed new code panels become ordinary syntax-highlighted editors immediately,
+with stable IDs that subsequent repairs patch in place. An unfinished insertion
+is shown as a temporary preview until its operation is complete. All state lives
+in Datahike/DataScript. The initiating tab polls every 200 ms; other open tabs
+discover active editing sessions and their locks every second. Reloading does
+not lose the working code or its operation log.
+
+Retry starts from the current document, including completed edits and your changes.
+Codex cannot delete panels or overwrite the active prompt. Request snapshots
+and proposed edits remain in Datahike for history, including conflicts.
 
 This uses the local, signed-in Codex CLI (`codex login`). The prose prompt and
-preceding code/prose in that document are sent to Codex; unrelated documents
-and later blocks are not included. The CLI runs with a read-only sandbox,
+selected code/prose panels, effective pinned instructions, and selected dependency
+summaries/implementations are sent to Codex; unrelated documents are not sent
+wholesale. The CLI runs with a read-only sandbox,
 no shell, no web search, no subagents, and no user-configured app integrations.
 The frontend never receives credentials. This is a local trusted-user app,
 not an authenticated multi-user hosting service.
@@ -1150,12 +1453,31 @@ cancels the subprocess. A server restart marks unfinished requests interrupted
 rather than silently rerunning a paid request. At most two requests run at a
 time, with a five-minute timeout.
 
-`JOURNAL_CODEX_BIN` selects the CLI executable and `JOURNAL_CODEX_MODEL` optionally
-selects a model; otherwise the CLI default is used. User CLI configuration is
-not loaded, but existing CLI authentication is reused. `npm run test:journal`
+Choose **Codex model** in the sidebar before sending a prompt. The selector
+reads the installed Codex app-server's paginated `model/list` catalog; **Refresh
+models** reloads it. The workspace choice is saved in Datahike and mirrored in
+DataScript. Each request freezes its choice, so switching models does not affect
+an in-flight request or automatic repairs. Thinking shows the resolved model;
+request inspection also includes the selected model. Explicit Retry uses the
+current selection. If discovery fails, the saved choice and Codex default remain
+usable, with an error shown beside the selector; unavailable models report errors
+instead of silently falling back. Reasoning effort uses Codex's configured/default
+behavior rather than forcing the same effort across different models.
+
+`JOURNAL_CODEX_BIN` selects the CLI executable. Choosing **Codex default** uses
+`JOURNAL_CODEX_MODEL` if set, otherwise the CLI default. An explicit UI selection
+overrides that environment default. The backend uses an ephemeral
+Codex app-server thread over stdio with real `item/agentMessage/delta` events.
+Existing CLI authentication/model settings are reused, but shell, subagents,
+apps, MCP servers, plugins, hooks, notifications, and web search are explicitly
+disabled; effective integration settings are checked before starting a thread.
+Only the three registered read-only journal tools are accepted; other tool
+and approval requests are rejected. `npm run test:journal`
 uses an explicit deterministic subprocess fixture, never your Codex account.
-See [Codex non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode)
-for the JSON event stream and structured-output protocol used here.
+See [Codex app-server](https://learn.chatgpt.com/docs/app-server) for the delta
+stream and per-turn structured-output protocol used here. The optional
+`scripts/journal-stream-smoke.clj` and `scripts/journal-api-smoke.clj` tests each
+make a real, authenticated request; neither runs in the regular test suite.
 
 # Example Projects
 

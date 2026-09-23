@@ -122,6 +122,35 @@
     (is (close? 48 (volume shape)))
     (is (support/numeric= {:min [0 0 2] :max [4 3 6]} (support/bounds shape)))))
 
+(deftest native-spatial-queries-and-provenance
+  (let [cube (m/cube 2 2 2) colored (m/color cube [0.2 0.4 0.6 1])
+        original (m/as-original colored)]
+    (is (close? (volume colored) (volume original)))
+    (is (= (sort (support/rows colored)) (sort (support/rows original))))
+    (doseq [shape [cube (m/model colored)]]
+      (m/with-spatial-index shape
+        (fn [index]
+          (let [hit (m/ray-cast index [1 1 5] [0 0 -4])]
+            (is (close? 3 (:distance hit)))
+            (is (support/numeric= [1 1 2] (:position hit)))
+            (is (close? 1 (reduce + (:barycentric hit)))))
+          (is (nil? (m/ray-cast index [1 1 5] [0 0 -1] :max-distance 2)))
+          (is (nil? (m/ray-cast index [4 4 5] [0 0 -1])))
+          (is (m/contains-point? index [1 1 1]))
+          (is (m/contains-point? index [0 1 1]))
+          (is (not (m/contains-point? index [0 1 1] :boundary? false)))
+          (is (not (m/contains-point? index [3 1 1])))
+          (is (close? 1 (:distance (m/closest-point index [3 1 1]))))
+          (is (m/overlap? index (m/translate cube [2 0 0])))
+          (is (not (m/overlap? index (m/translate cube [3 0 0]))))
+          (is (thrown? #?(:clj Exception :cljs js/Error) (m/ray-cast index [1 1 5] [0 0 0])))))))
+  (is (nil? (m/closest-point (m/difference (m/cube 1 1 1) (m/cube 1 1 1)) [0 0 0])))
+  #?(:cljs
+     (let [index (atom nil)]
+       (is (thrown? js/Error (m/with-spatial-index (m/cube 1 1 1)
+                              #(do (reset! index %) (throw (js/Error. "scope"))))))
+       (is (rt/call @index "isDeleted")))))
+
 (deftest smoothing-and-warp
   (let [a (m/tetrahedron)
         refined (m/refine (m/smooth (m/get-mesh a)) 4)

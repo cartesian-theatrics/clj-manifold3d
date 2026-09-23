@@ -4,7 +4,8 @@
   Geometry is authored in local coordinates; node transforms and animation
   tracks are written separately."
   (:require [clj-manifold3d.model :as model]
-            [clj-manifold3d.glb :as glb])
+            [clj-manifold3d.glb :as glb]
+            [clj-manifold3d.scene-features :as features])
   (:import [java.nio ByteBuffer ByteOrder]
            [manifold3d Manifold]
            [manifold3d.linalg DoubleVec3]))
@@ -113,6 +114,8 @@
   (or (= scene-type (:model/type value)) (glb/document? value)))
 
 (defn- normalize-node [index node]
+  (features/validate-node! node)
+  (features/validate-material! (:material node))
   (let [id (or (:id node) (:name node))
         children (vec (or (:children node) []))
         transform (merge (select-keys node [:translation :rotation :scale :matrix])
@@ -126,7 +129,7 @@
       (assert-vector! ":transform/matrix" matrix 16)
       (when (some #(contains? transform %) [:translation :rotation :scale])
         (throw (ex-info "Use matrix or TRS, not both" {:node id}))))
-    (assoc (select-keys node [:name :geometry :material :extras])
+    (assoc (select-keys node [:name :geometry :material :extras :light :camera])
            :id id
            :children children
            :transform transform)))
@@ -325,7 +328,7 @@
                         "bufferViews" (:views state)
                         "accessors" (:accessors state)}
                  (seq animations) (assoc "animations" animations))]
-      {:gltf gltf
+      {:gltf (features/decorate-nodes gltf nodes)
        :segments (:segments state)
        :bin-length bin-length})))
 
@@ -339,26 +342,10 @@
     output))
 
 (defn- appearance-assets [geometry material]
-  (when material
-    (when-not (and (map? material) (every? #{:color :roughness :metalness} (keys material)))
-      (throw (ex-info "Scene material supports :color, :roughness and :metalness" {:material material})))
-    (when-let [color (:color material)] (assert-vector! ":material/color" color 4))
-    (doseq [x (concat (:color material) (vals (select-keys material [:roughness :metalness])))]
-      (when-not (and (finite-number? x) (<= 0 x 1))
-        (throw (ex-info "Material components must be finite and in [0,1]" {:material material})))))
   (let [asset (glb/read-glb (model/export-model (model/model geometry) nil))
         asset (-> asset (assoc-in [:gltf "nodes"] [])
                   (assoc-in [:gltf "scenes"] [{"nodes" []}]))]
-    (if material
-      (update-in asset [:gltf "materials"]
-                 (fn [materials]
-                   (mapv #(cond-> (update % "pbrMetallicRoughness" merge
-                                          (cond-> {}
-                                            (:color material) (assoc "baseColorFactor" (:color material))
-                                            (contains? material :roughness) (assoc "roughnessFactor" (:roughness material))
-                                            (contains? material :metalness) (assoc "metallicFactor" (:metalness material))))
-                            (and (:color material) (< (nth (:color material) 3) 1)) (assoc "alphaMode" "BLEND")) materials)))
-      asset)))
+    (update asset :gltf features/apply-material material)))
 
 (defn scene-document
   "Compile a scene to an immutable GLB document, sharing repeated geometry.

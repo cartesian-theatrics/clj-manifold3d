@@ -19,6 +19,112 @@
 (defn colors [object]
   (mapv #(m/sample-color object % 0.25 0.25) (range (support/triangle-count object))))
 
+(defn- uv-areas [object]
+  (let [rows (support/rows object)]
+    (mapv (fn [face]
+            (let [[[u0 v0] [u1 v1] [u2 v2]] (map #(take-last 2 (rows %)) face)]
+              (support/abs (- (* (- u1 u0) (- v2 v0)) (* (- v1 v0) (- u2 u0))))))
+          (partition 3 (support/mesh-field (m/get-mesh-gl object) "triVerts")))))
+
+(defn- used-samplers [doc]
+  (for [primitive (mapcat :primitives (:meshes doc))
+        :let [texture (get-in doc [:materials (:material primitive) :pbrMetallicRoughness :baseColorTexture :index])]
+        :when (some? texture)]
+    (get-in doc [:samplers (get-in doc [:textures texture :sampler])])))
+
+(deftest whole-surface-box-mapping-keeps-solids-and-covers-every-face
+  (doseq [source [(m/cube 4 6 8 true)
+                  (m/sphere 3 24)
+                  (m/revolve (m/translate (m/circle 1 12) [3 0]) 24)
+                  (m/difference (m/cube 6 6 6 true) (m/translate (m/cube 5 5 5 true) [2 2 2]))
+                  (m/union (m/cube 2 2 2) (m/translate (m/cube 2 2 2) [5 0 0]))]]
+    (let [result (m/texture-all source red-blue :size [2 3])
+          bytes (m/export-model result nil) doc (support/glb-json bytes)]
+      (is (m/model? result))
+      (is (= :NoError (m/status result)))
+      (is (near? (:volume (m/get-properties source)) (:volume (m/get-properties result))))
+      (is (support/numeric= (support/bounds source) (support/bounds result)))
+      (is (= (support/triangle-count source) (support/triangle-count result)))
+      (is (every? #(and (support/finite? %) (pos? %)) (uv-areas result)))
+      (is (= 1 (count (:images doc))))
+      (is (= [2 1] ((juxt :width :height) (support/glb-image bytes 0))))
+      (is (seq (used-samplers doc)))
+      (is (every? #(= [10497 10497] ((juxt :wrapS :wrapT) %)) (used-samplers doc)))
+      (is (every? #(some? (get-in % [:attributes :TEXCOORD_0])) (mapcat :primitives (:meshes doc)))))))
+
+(deftest whole-surface-box-scale-seams-and-immutable-layers
+  (let [source (-> (m/cube 4 4 4 true) (m/color [0 0 1 1]) m/model)
+        result (m/texture-all source red :size [2 2] :opacity 0.5)
+        remapped (m/texture-all result blue-half :size [4 4] :origin [1 1 1] :scale [-2 2] :offset [0.25 0.5])
+        mesh (m/get-mesh-gl result)]
+    (is (= 0 (:layers (m/model-info source))))
+    (is (= 1 (:layers (m/model-info result))))
+    (is (= 2 (:layers (m/model-info remapped))))
+    (is (seq (support/mesh-field mesh "mergeFromVert")))
+    (is (= 9 (support/mesh-field mesh "numProp")))
+    (is (every? #(every? true? (map near? % [0.5 0 0.5 1])) (colors result)))
+    ;; Remapping must not destroy either base colors or the first UV pair.
+    (is (every? (set (support/rows result)) (map #(subvec % 0 9) (support/rows remapped))))
+    (doseq [[_ _ z _ _ _ _ u v] (support/rows result)]
+      (is (and (support/finite? u) (support/finite? v) (<= -2 z 2))))
+    (let [a (m/texture-all (m/cube 4 4 4 true) red-blue :size [2 2])
+          b (m/texture-all (m/cube 4 4 4 true) red-blue :size [4 4] :offset [0.25 0.5])]
+      (is (every? true?
+                  (map (fn [ra rb]
+                         (and (near? (+ 0.25 (* 0.5 (nth ra 3))) (nth rb 3))
+                              (near? (+ 0.5 (* 0.5 (nth ra 4))) (nth rb 4))))
+                       (support/rows a) (support/rows b)))))))
+
+(deftest whole-surface-atlases-use-native-unwrapping
+  (doseq [source [(m/cube 4 4 4 true) (m/sphere 3 16)
+                  (m/revolve (m/translate (m/circle 1 8) [3 0]) 16)]
+          pack? [true false]]
+    (let [result (m/texture-all source red-blue :mapping :unwrap :pack? pack? :scale 0.75)
+          doc (support/glb-json (m/export-model result nil))]
+      (is (= :NoError (m/status result)))
+      (is (near? (:volume (m/get-properties source)) (:volume (m/get-properties result))))
+      (is (every? #(and (support/finite? %) (pos? %)) (uv-areas result)))
+      (is (= 1 (:layers (m/model-info result))))
+      (is (seq (used-samplers doc)))
+      (is (every? #(= (if pack? 33071 10497) (:wrapS %)) (used-samplers doc)))
+      (when pack? (is (every? #(<= 0 % 1) (mapcat #(take-last 2 %) (support/rows result))))))))
+
+(deftest whole-surface-textures-survive-booleans-and-transforms
+  (let [base (m/cube 4 4 4 true)
+        left (m/texture-all base red :size [2 2])
+        right (-> base (m/texture-all blue :mapping :unwrap) (m/translate [1 0.5 0.25]))]
+    (doseq [op [m/union m/difference m/intersection]]
+      (let [result (-> (op left right) (m/rotate [10 20 30]) (m/translate [2 3 4]) (m/refine 2))
+            samples (colors result)
+            doc (support/glb-json (m/export-model result nil))]
+        (is (= :NoError (m/status result)))
+        (is (= 2 (:layers (m/model-info result)) (:images (m/model-info result))))
+        (is (some #(> (nth % 0) 0.99) samples))
+        (is (some #(> (nth % 2) 0.99) samples))
+        (is (= 2 (count (:images doc))))))))
+
+(deftest local-decals-compose-over-whole-surface-texturing
+  (let [base (m/texture-all (m/cube 10 10 2 true) red :size [2 2])
+        decal (m/texture base blue :origin [0 0 1] :normal [0 0 1] :size [3 2] :pixel-size 0.5)
+        covered (m/texture-all decal red :size [2 2])]
+    (is (some #(> (nth % 0) 0.99) (colors decal)))
+    (is (some #(> (nth % 2) 0.99) (colors decal)))
+    (is (every? #(> (nth % 0) 0.99) (colors covered)))
+    (is (= 3 (:layers (m/model-info covered))))
+    (is (near? 200 (:volume (m/get-properties covered))))))
+
+(deftest whole-surface-options-fail-before-changing-inputs
+  (let [source (m/model (m/cube 2 2 2))]
+    (doseq [opts [[:mapping :geodesic] [:size [0 1]] [:scale 0] [:origin [0 0 support/nan]]
+                  [:normal [0 0 1]] [:axes [:x :y]] [:uv-rect [0 0 1 1]]
+                  [:depth-map [[1 1] [1 1]]] [:pack? false]
+                  [:mapping :unwrap :scale [1 2]] [:mapping :unwrap :seam-angle 181]
+                  [:mapping :unwrap :padding 0.5] [:mapping :unwrap :pack? nil]
+                  [:mapping :unwrap :size [2 2]]]]
+      (is (thrown? #?(:clj Exception :cljs js/Error) (apply m/texture-all source red opts))))
+    (is (= 0 (:layers (m/model-info source))))
+    (is (near? 8 (:volume (m/get-properties source))))))
+
 (deftest thread-first-models-compose-native-layers
   (let [source (m/model (m/cube 4 4 4 true))
         first (m/texture source red :mapping :planar :name "red")
@@ -207,9 +313,42 @@
     (is (thrown? #?(:clj Exception :cljs js/Error) (m/export-model source nil :color [1 0 0])))
     (is (thrown? #?(:clj Exception :cljs js/Error) (m/hull source)))
     (is (thrown? #?(:clj Exception :cljs js/Error) (m/trim-by-plane source [0 0 1])))
-    ;; JVM scenes now retain Model appearance; the CLJS exporter is a follow-up.
-    #?(:clj (is (seq (:meshes (support/glb-json
-                              (support/scene-bytes (animation/scene {:nodes [{:id :model :geometry source}]}))))))
-       :cljs (is (thrown? js/Error
-                         (support/scene-bytes (animation/scene {:nodes [{:id :model :geometry source}]})))))
+    (is (seq (:meshes (support/glb-json
+                       (support/scene-bytes (animation/scene {:nodes [{:id :model :geometry source}]}))))))
     (is (= 0 (:layers (m/model-info source))))))
+
+(deftest animated-scenes-retain-colors-and-distinct-textures
+  (let [colored (m/color (m/cube 2 3 4) [0.8 0.2 0.1 1])
+        textured (m/texture (m/cube 2 2 2) red-blue :mapping :planar)
+        other (m/texture (m/cube 1 1 1) blue :mapping :planar)
+        track (animation/keyframes [{:time 0 :translation [0 0 0] :rotation [0 0 0 1] :scale [1 1 1]}
+                                    {:time 1 :translation [1 0 0] :rotation [0 0 1 0] :scale [1 1 1]}])
+        value (animation/scene {:nodes [{:id :color :geometry colored}
+                                         {:id :texture :geometry textured :translation [4 0 0]}
+                                         {:id :other :geometry other :translation [8 0 0]}
+                                         {:id :copy :geometry colored :translation [-4 0 0]}
+                                         {:id :tint :geometry colored :material {:color [1 1 1 0.5] :roughness 0.3 :metalness 0.4}}]
+                                :animations [{:channels [{:node :texture :path :rotation :track track}]}]})
+        bytes (support/scene-bytes value) doc (support/glb-json bytes)
+        primitive (fn [node] (get-in doc [:meshes (get-in doc [:nodes node :mesh]) :primitives 0]))
+        material (fn [node] (get-in doc [:materials (:material (primitive node))]))
+        color-values (support/glb-accessor bytes (get-in (primitive 0) [:attributes :COLOR_0]))]
+    (is (= 4 (count (:meshes doc))) "Repeated geometry shares its asset, distinct materials do not")
+    (is (= (get-in doc [:nodes 0 :mesh]) (get-in doc [:nodes 3 :mesh])))
+    (is (every? true? (map near? [0.8 0.2 0.1] (take 3 color-values))))
+    (is (every? #(contains? (:attributes (primitive %)) :TEXCOORD_0) [1 2]))
+    (is (= 2 (count (:images doc))))
+    (doseq [[node expected] [[1 [255 0 0 255]] [2 [0 0 255 255]]]]
+      (let [texture (get-in (material node) [:pbrMetallicRoughness :baseColorTexture :index])
+            image-index (get-in doc [:textures texture :source])
+            image (support/glb-image bytes image-index)]
+        (is (= expected ((:pixel image) 0 0)))))
+    (is (= [1 1 1 0.5] (get-in (material 4) [:pbrMetallicRoughness :baseColorFactor])))
+    (is (= "BLEND" (:alphaMode (material 4))))
+    (is (= 0.3 (get-in (material 4) [:pbrMetallicRoughness :roughnessFactor])))
+    (is (= 1 (get-in doc [:animations 0 :channels 0 :target :node])))
+    (is (= [0.0 1.0] (support/glb-accessor bytes (get-in doc [:animations 0 :samplers 0 :input]))))
+    (is (support/numeric= [0 0 0 1 0 0 1 0] (support/glb-accessor bytes (get-in doc [:animations 0 :samplers 0 :output]))))
+    (doseq [view (:bufferViews doc)]
+      (is (zero? (mod (:byteOffset view 0) 4)))
+      (is (<= (+ (:byteOffset view 0) (:byteLength view)) (get-in doc [:buffers 0 :byteLength]))))))

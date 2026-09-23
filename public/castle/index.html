@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A wish over the castle · Manifold</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#040916;color:#e9e3d3;font:14px system-ui;overflow:hidden}canvas{display:block;width:100vw;height:100vh}header{position:absolute;top:25px;left:30px;pointer-events:none}h1{font:normal 26px Georgia;margin:0 0 7px}header p{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#9bacc0;margin:0}footer{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:16px;background:#061020dc;border:1px solid #8198ae44;border-radius:14px;padding:13px 18px;white-space:nowrap;backdrop-filter:blur(12px)}button,a{color:inherit;background:#ffffff0b;border:1px solid #ffffff25;padding:7px 10px;border-radius:7px;text-decoration:none;cursor:pointer}label{display:flex;align-items:center;gap:6px;font-size:12px}input[type=range]{width:190px;accent-color:#e8c38a}#status{position:absolute;inset:45% 0 auto;text-align:center;color:#d8c7a6}#time{font-variant-numeric:tabular-nums;font-size:12px;min-width:58px}@media(max-width:850px){footer{gap:7px;max-width:98vw;flex-wrap:wrap;justify-content:center}input[type=range]{width:100px}header{left:20px}h1{font-size:21px}}
+</style>
+<header><h1>A wish over the castle</h1><p>Procedural Clojure · Manifold geometry</p></header>
+<div id="status">Loading stone, starlight and a little magic…</div>
+<footer>
+<button id="play" title="Play / pause · Space">Pause</button>
+<input id="timeline" title="Scrub the ten-second scene" type="range" min="0" max="10" step="0.01" value="0"><span id="time">0.0 / 10</span>
+<label title="Use the animated GLB camera; disable to orbit with the mouse"><input id="cinematic" type="checkbox" checked>Shot camera</label>
+<label title="Renderer-only planar water reflections"><input id="reflection" type="checkbox" checked>Reflections</label>
+<label title="Renderer-only glow around emissive geometry"><input id="bloom" type="checkbox" checked>Bloom</label>
+<button id="fullscreen" title="Toggle fullscreen · F">Full screen</button>
+<a href="/scene.glb" download="fairytale-castle-night.glb" title="Download stone textures, lights, camera and animation">GLB ↓</a>
+</footer>
+<script type="importmap">{"imports":{"three":"/vendor/three/build/three.module.js","three/addons/":"/vendor/three/examples/jsm/"}}</script>
+<script type="module" src="/viewer.js"></script>
+</html>

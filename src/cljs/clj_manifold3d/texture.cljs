@@ -5,8 +5,19 @@
             [clj-manifold3d.runtime :as rt]
             [clj-manifold3d.glb :as glb]
             [clj-manifold3d.raster :as raster]
+            [clj-manifold3d.pixels :as pixels]
             ["fast-png" :as png]
             [goog.object :as gobj]))
+
+(defn image
+  "Generate PNG bytes synchronously. pixel-fn receives integer x,y (top-left origin)
+  and returns normalized sRGB [r g b alpha]. Dimensions must be 1..2048."
+  [width height pixel-fn]
+  (pixels/dimensions! width height)
+  (let [data (js/Uint8Array. (* width height 4))]
+    (doseq [y (range height) x (range width)]
+      (.set data (to-array (pixels/rgba8 (pixel-fn x y))) (* 4 (+ x (* width y)))))
+    ((gobj/get png "encode") (js-obj "width" width "height" height "data" data "channels" 4 "depth" 8))))
 
 (defn bake
   "Bake opaque m/color geometry, viewed from +Z, to PNG bytes synchronously.

@@ -1,21 +1,25 @@
 {
   "type": "object",
   "properties": {
-    "panels": {
+    "summary": {"type": "string"},
+    "edits": {
       "type": "array",
-      "minItems": 1,
-      "maxItems": 20,
+      "minItems": 0,
+      "maxItems": 100,
       "items": {
         "type": "object",
         "properties": {
-          "kind": {"type": "string", "enum": ["prose", "code"]},
-          "source": {"type": "string"}
+          "action": {"type": "string", "enum": ["patch", "insert", "create"]},
+          "target": {"type": ["string", "null"]},
+          "kind": {"type": "string", "enum": ["prose", "code", "namespace"]},
+          "before": {"type": ["string", "null"]},
+          "after": {"type": "string"}
         },
-        "required": ["kind", "source"],
+        "required": ["action", "target", "kind", "before", "after"],
         "additionalProperties": false
       }
     }
   },
-  "required": ["panels"],
+  "required": ["summary", "edits"],
   "additionalProperties": false
 }

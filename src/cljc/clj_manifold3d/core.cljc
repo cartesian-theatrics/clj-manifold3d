@@ -33,9 +33,15 @@
    (def ^:dynamic *manifold-module* (manifold3d)))
 
 #?(:clj (do
+          (defn as-original
+            "Reset a bare Manifold's construction provenance before assigning a new material. Geometry and vertex properties are preserved."
+            [object]
+            (when (native-model/model? object) (throw (ex-info "as-original expects an untextured Manifold" {})))
+            (.asOriginal ^Manifold (impl/to-csg object)))
           (def model native-model/model)
           (def model? native-model/model?)
           (def texture native-model/texture)
+          (def texture-all native-model/texture-all)
           (def model-info native-model/info)
           (def sample-color native-model/sample-color)
           (defn- require-untextured [operation objects]
@@ -1325,6 +1331,9 @@ to the interpolated surface according to their barycentric coordinates."
      (defn spatial-index
        "Build a reusable native BVH snapshot of a Manifold or Model; with-open supported."
        [object] (spatial/spatial-index object))
+     (defn with-spatial-index
+       "Call f with a fresh native BVH; release the index even if f throws. Return data or geometry, not the borrowed index."
+       [object f] (with-open [index (spatial/spatial-index object)] (f index)))
      (defn ray-cast
        "Nearest forward hit or nil; accepts geometry or a spatial-index."
        [object origin direction & options]

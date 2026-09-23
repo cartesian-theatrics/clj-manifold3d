@@ -5,6 +5,7 @@
             [clj-manifold3d.animation :as animation]
             [clj-manifold3d.mesh-io :as mesh-io]
             [clj-manifold3d.model :as native-model]
+            [clj-manifold3d.spatial :as spatial]
             [goog.object :as gobj]))
 
 (def init! rt/init!)
@@ -19,8 +20,32 @@
 (def model native-model/model)
 (def model? native-model/model?)
 (def texture native-model/texture)
+(def texture-all native-model/texture-all)
 (def model-info native-model/info)
 (def sample-color native-model/sample-color)
+(defn as-original
+  "Reset a bare Manifold's construction provenance; preserve geometry and vertex properties."
+  [object]
+  (when (model? object) (throw (ex-info "as-original expects an untextured Manifold" {})))
+  (rt/call object "asOriginal"))
+(defn spatial-index
+  "Build a native BVH snapshot. Release with dispose!, or use with-spatial-index."
+  [object] (spatial/spatial-index object))
+(defn with-spatial-index
+  "Call f with a fresh native BVH; release it even on exceptions. Return data or geometry, not the index."
+  [object f] (spatial/with-spatial-index object f))
+(defn ray-cast
+  "Nearest forward surface hit or nil; direction need not be normalized. Options: :max-distance."
+  [object origin direction & options] (apply spatial/ray-cast object origin direction options))
+(defn closest-point
+  "Nearest surface point, distance and normal, or nil."
+  [object point] (spatial/closest-point object point))
+(defn contains-point?
+  "Point containment; options :tolerance and :boundary?."
+  [object point & options] (apply spatial/contains-point? object point options))
+(defn overlap?
+  "Native BVH contact/intersection/containment; optional :tolerance."
+  [a b & options] (apply spatial/overlap? a b options))
 (defn manifold? [x] (rt/instance-of? "Manifold" x))
 (defn cross-section? [x] (rt/instance-of? "CrossSection" x))
 (defn csg? [x] (or (model? x) (manifold? x) (cross-section? x)))
