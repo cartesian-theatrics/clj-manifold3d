@@ -30,6 +30,12 @@ const {createHash} = require('node:crypto');
     const digest = createHash('sha256').update(await fs.readFile(path.join(output, 'journal', file))).digest('hex').slice(0, 16);
     html = html.replaceAll(`./${file}`, `./${file}?v=${digest}`);
   }
+  // Version the worker and its WASM too, without changing browser storage keys.
+  const runtimeHash = createHash('sha256');
+  for (const file of ['journal/worker/worker.js', 'wasm/manifold.js', 'wasm/manifold.wasm']) {
+    runtimeHash.update(await fs.readFile(path.join(output, file)));
+  }
+  html = html.replace('data-journal-mode="static"', `data-journal-mode="static" data-journal-build="${runtimeHash.digest('hex').slice(0, 16)}"`);
   await fs.writeFile(index, html);
   await fs.writeFile(path.join(output, '.nojekyll'), '');
   await fs.writeFile(path.join(output, 'index.html'), '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="refresh" content="0;url=./journal/"><title>Modeling Journal</title><a href="./journal/">Open the Modeling Journal</a></html>\n');

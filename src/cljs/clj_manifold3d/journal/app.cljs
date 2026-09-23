@@ -226,7 +226,7 @@
 
 (defn start-worker! []
   (state/workspace! {:ui/engine "starting"})
-  (let [w (js/Worker. (transport/asset-url "worker/worker.js"))]
+  (let [w (js/Worker. (transport/versioned-asset-url "worker/worker.js"))]
     (reset! worker w)
     (set! (.-onerror w) (fn [e] (state/workspace! {:ui/engine (str "Engine error: " (.-message e))})))
     (set! (.-onmessage w)

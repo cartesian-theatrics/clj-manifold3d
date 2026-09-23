@@ -11,6 +11,14 @@
   (m/translate (m/union box ball) [30 0 0])
   (m/translate (m/difference box ball) [-30 0 0])
   (m/intersection box ball))"]
+   ["minkowski" "## Round a box with Minkowski sum\n\nMinkowski sum adds every point of one solid to every point of the other. Adding a sphere rounds a box's edges and grows it outward by the sphere's radius. Left: the original 20 × 14 × 10 box. Right: the rounded 24 × 18 × 14 result. Change `radius` and run this panel again."
+    "(let [size [20 14 10]
+      radius 2
+      box (m/cube size true)
+      rounded (m/minkowski-sum box (m/sphere radius 32))]
+  (m/union
+    (m/translate (m/color box [0.55 0.6 0.65 1]) [-18 0 0])
+    (m/translate (m/color rounded [0.2 0.6 0.9 1]) [18 0 0])))"]
    ["profile" "## Draw a cross-section\n\nA sequence of points makes a 2D polygon. Leave it flat to inspect the profile before extrusion."
     "(def profile
   (m/cross-section
@@ -165,7 +173,7 @@ textured"]
                  '[clj-manifold3d.texture :as texture] '[clj-manifold3d.animation :as animation]])
    :blocks (vec
              (cons {:id "journal-readme-intro" :kind "prose" :hidden false
-                    :source "# Learn by making\n\nA runnable companion to the README's Examples section. Read a note, run a block, and inspect its shape. Each code panel returns geometry, a cross-section or an animated scene instead of writing a file. Later panels reuse earlier definitions; Run page executes the whole walkthrough.\n\nThe examples use portable math and in-memory data. Font-file text, image/PLY imports and filesystem export require asynchronous assets or a local environment and are not run here. Use each model's Download action for GLB export."}
+                    :source "# Learn by making\n\n[GitHub repository](https://github.com/cartesian-theatrics/clj-manifold3d) · [Library README](https://github.com/cartesian-theatrics/clj-manifold3d#readme)\n\nA runnable companion to the README's Examples section. Read a note, run a block, and inspect its shape. Each code panel returns geometry, a cross-section or an animated scene instead of writing a file. Later panels reuse earlier definitions; Run page executes the whole walkthrough.\n\nThe examples use portable math and in-memory data. Font-file text, image/PLY imports and filesystem export require asynchronous assets or a local environment and are not run here. Use each model's Download action for GLB export."}
                    (mapcat (fn [[id prose source]]
                              [{:id (str "journal-readme-" id "-notes") :kind "prose" :source prose :hidden false}
                               {:id (str "journal-readme-" id) :kind "code" :source source :hidden false}]) stages)))})

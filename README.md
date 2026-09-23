@@ -1,3 +1,5 @@
+[Open the live modeling journal](https://cartesian-theatrics.github.io/clj-manifold3d/journal/) · [GitHub repository](https://github.com/cartesian-theatrics/clj-manifold3d)
+
 [![Clojars Project](https://img.shields.io/clojars/v/org.clojars.cartesiantheatrics/clj-manifold3d.svg?include_prereleases)](https://clojars.org/org.clojars.cartesiantheatrics/clj-manifold3d)
 
 
@@ -1297,7 +1299,7 @@ by default. Choose **Run page** to evaluate a document; every modeling block
 returns a shape or scene, showing the construction stages rather than only the
 finished assembly. The full castle can take a minute or more, depending on the device.
 
-The README journal has 23 runnable panels covering booleans, cross-sections,
+The README journal has 24 runnable panels covering booleans, Minkowski rounding, cross-sections,
 extrusion, offsets, revolution, hulls, polyhedra, frames, three loft styles,
 slicing, height fields, colors, composition, circles/arcs, vertices/halfedges,
 texturing and a lit animated scene. File/font-dependent examples are explained
@@ -1338,7 +1340,7 @@ HTTP host, or upload its contents as a Pages artifact. The root links to
 subdirectory. Use HTTP(S), not `file://`. Only an explicit public-asset allowlist
 is copied: **never upload the repository, `data/`, local journals, or credentials**.
 The published site is served from the `gh-pages` branch; source stays on
-`3d-journal`. Building the static artifact does not switch the local app into
+`main`. Building the static artifact does not switch the local app into
 static mode or modify its database.
 
 `test:journal:static` serves the production bundle under a nested path with no

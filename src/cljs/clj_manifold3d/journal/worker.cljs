@@ -141,8 +141,15 @@
            (send! {:type "error" :id id :block (ns-form/header-id namespace)
                    :message (or (.-message error) (str error))})))))
 
+(defn wasm-url [filename]
+  (let [location (js/URL. (.-href (.-location js/self)))
+        url (js/URL. (str "../../wasm/" filename) (.-href location))
+        version (.get (.-searchParams location) "v")]
+    (when (seq version) (.set (.-searchParams url) "v" version))
+    (.-href url)))
+
 (defn main []
-  (js/importScripts (.-href (js/URL. "../../wasm/manifold.js" (.-href (.-location js/self)))))
-  (-> (m/init! {:wasm-url (.-href (js/URL. "../../wasm/manifold.wasm" (.-href (.-location js/self))))})
+  (js/importScripts (wasm-url "manifold.js"))
+  (-> (m/init! {:wasm-url (wasm-url "manifold.wasm")})
       (.then (fn [_] (set! (.-onmessage js/self) evaluate!) (send! {:type "ready"})))
       (.catch #(send! {:type "fatal" :message (str %)}))))

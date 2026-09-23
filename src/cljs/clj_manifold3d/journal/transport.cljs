@@ -8,6 +8,12 @@
 
 (defn asset-url [path] (.-href (js/URL. path (.-baseURI js/document))))
 
+(defn versioned-asset-url [path]
+  (let [url (js/URL. (asset-url path))
+        version (.getAttribute (.-documentElement js/document) "data-journal-build")]
+    (when (seq version) (.set (.-searchParams url) "v" version))
+    (.-href url)))
+
 (defn- transact-browser! [f]
   (js/Promise.
    (fn [resolve reject]

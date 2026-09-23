@@ -51,3 +51,5 @@
 #browser-storage:not([hidden]){display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 18px;border-top:1px solid var(--line);background:var(--page);font-size:12px}
 #browser-storage span{flex:1;min-width:180px}
 [hidden]{display:none!important}
+
+.repo-link{white-space:nowrap;font-size:12px;text-underline-offset:3px}

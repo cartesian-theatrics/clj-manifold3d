@@ -27,8 +27,9 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   try {
     browser = await chromium.launch({headless:true, args:['--use-angle=swiftshader', '--enable-unsafe-swiftshader']});
     const context = await browser.newContext({viewport:{width:1440,height:1000}, acceptDownloads:true});
-    const requests = [], errors = [];
+    const requests = [], errors = [], runtimeRequests = [];
     context.on('request', req => {
+      if (/\/(worker\/worker\.js|wasm\/manifold\.(js|wasm))(\?|$)/.test(req.url())) runtimeRequests.push(req.url());
       if (req.url().startsWith('http') && (!req.url().startsWith(base) || req.url().includes('/api/'))) requests.push(req.url());
     });
     await context.addInitScript(() => Object.defineProperty(window, 'journalBridge', {configurable:true, set(bridge) {
@@ -57,6 +58,11 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       return model;
     };
     await page.goto(url); await ready(page);
+    assert.equal(await page.locator('.app-header .repo-link').getAttribute('href'), 'https://github.com/cartesian-theatrics/clj-manifold3d');
+    const buildVersion = await page.locator('html').getAttribute('data-journal-build');
+    assert.ok(buildVersion);
+    assert.equal(runtimeRequests.length, 3);
+    assert.ok(runtimeRequests.every(url => new URL(url).searchParams.get('v') === buildVersion));
     assert.deepEqual((await page.locator('#document-list [data-document]').evaluateAll(els => els.map(el => el.dataset.document))).sort(),
       ['journal.castle-architecture', 'journal.castle-night', 'journal.flag-uv', 'journal.readme']);
     assert.equal(await page.locator('.codex-model-controls').isVisible(), false);
@@ -71,8 +77,15 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     await page.locator('[data-pane-id="pane-architecture"]').getByRole('button', {name:'Close pane · Ctrl+Alt+W', exact:true}).click();
     await page.locator('[data-document="journal.readme"]').click();
     await evaluate();
-    assert.equal(await page.locator('[data-kind="code"]').count(), 23);
-    console.log('PASS: all 23 README panels evaluate and produce geometry, including lofts, halfedges and animation');
+    assert.equal(await page.locator('[data-kind="code"]').count(), 24);
+    const introLink = page.locator('[data-block-id="journal-readme-intro"] a').first();
+    assert.equal(await introLink.getAttribute('href'), 'https://github.com/cartesian-theatrics/clj-manifold3d');
+    const minkowski = page.locator('[data-block-id="journal-readme-minkowski"] .solid-preview');
+    await minkowski.scrollIntoViewIfNeeded();
+    await page.waitForFunction(el => el.dataset.loaded === 'true', await minkowski.elementHandle(), {timeout:120000});
+    assert.ok((await minkowski.evaluate(el => el.testViewer.inspect())).meshCount > 0);
+    await page.screenshot({path:'target/journal-minkowski.png'});
+    console.log('PASS: all 24 README panels evaluate, including rendered Minkowski sum; repository links and versioned runtime verified');
     await page.locator('[data-document="journal.flag-uv"]').click();
     const flag = await evaluate();
     assert.ok((await flag.evaluate(el => el.testViewer.inspect())).meshCount > 0);
