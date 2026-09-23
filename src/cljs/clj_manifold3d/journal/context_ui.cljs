@@ -3,6 +3,7 @@
             [clj-manifold3d.journal.context :as context]
             [clj-manifold3d.journal.document :as doc]
             [clj-manifold3d.journal.namespace :as ns-form]
+            [clj-manifold3d.journal.transport :as transport]
             [cljs.reader :as reader]
             [clojure.string :as str]))
 
@@ -105,11 +106,7 @@
     (if-let [request (state/request-input (:namespace document) (:id prompt) (str (random-uuid)))]
       (let [serialized (pr-str request)]
         (state/workspace! {:ui/context-request serialized :ui/context-inspection "" :ui/context-error ""})
-        (-> (js/fetch "/api/codex/inspect" (clj->js {:method "POST" :headers {"Content-Type" "application/json"}
-                                                    :body (js/JSON.stringify (clj->js request))}))
-            (.then (fn [r] (-> (.json r) (.then (fn [body]
-                                                (let [body (js->clj body :keywordize-keys true)]
-                                                  (when-not (.-ok r) (throw (js/Error. (:error body)))) body))))))
+        (-> (transport/api "POST" "/api/codex/inspect" request)
             (.then #(when (= serialized (:ui/context-request (state/workspace)))
                       (state/workspace! {:ui/context-inspection (pr-str %)})))
             (.catch #(when (= serialized (:ui/context-request (state/workspace)))

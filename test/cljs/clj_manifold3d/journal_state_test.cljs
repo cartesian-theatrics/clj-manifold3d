@@ -4,6 +4,7 @@
             [clj-manifold3d.journal-verification-test]
             [clj-manifold3d.journal-collaboration-test]
             [clj-manifold3d.journal-document-test]
+            [clj-manifold3d.journal-browser-store-test]
             [clj-manifold3d.journal-generation-test]
             [clj-manifold3d.journal-stream-test]
             [clj-manifold3d.journal-context-test]
@@ -294,4 +295,15 @@
       (is (not (state/accept-request! response)))
       (is (= 2 (count (state/documents)))))))
 
-(defn main [] (run-tests 'clj-manifold3d.journal-document-test 'clj-manifold3d.journal-generation-test 'clj-manifold3d.journal-stream-test 'clj-manifold3d.journal-context-test 'clj-manifold3d.journal-namespace-test 'clj-manifold3d.journal-verification-test 'clj-manifold3d.journal-collaboration-test 'clj-manifold3d.journal-state-test))
+(deftest import-replaces-panels-and-keeps-save-baseline
+  (d/reset-conn! state/conn (d/empty-db schema/schema))
+  (let [original (doc/new-document "test.backup" "Backup")
+        changed (assoc original :blocks [(doc/block "code" "42")])]
+    (state/put-document! original)
+    (state/transact! [{:document/id "test.backup" :document/saved-content "baseline"}])
+    (state/import-documents! [changed])
+    (is (= (mapv :id (:blocks changed)) (mapv :id (:blocks (state/document "test.backup")))))
+    (is (= "baseline" (:document/saved-content (state/pull '[*] [:document/id "test.backup"]))))
+    (doseq [b (:blocks original)] (is (nil? (state/pull '[*] [:block/id (:id b)]))))))
+
+(defn main [] (run-tests 'clj-manifold3d.journal-browser-store-test 'clj-manifold3d.journal-document-test 'clj-manifold3d.journal-generation-test 'clj-manifold3d.journal-stream-test 'clj-manifold3d.journal-context-test 'clj-manifold3d.journal-namespace-test 'clj-manifold3d.journal-verification-test 'clj-manifold3d.journal-collaboration-test 'clj-manifold3d.journal-state-test))

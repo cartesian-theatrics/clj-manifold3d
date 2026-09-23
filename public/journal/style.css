@@ -45,3 +45,9 @@
 .viewer-placeholder span{display:block;margin-bottom:8px}
 .viewer-message{color:#a33e23;font-size:12px;white-space:pre-wrap}
 .viewer-message:empty{display:none}
+:root[data-journal-mode=static] body{display:flex;flex-direction:column}
+:root[data-journal-mode=static] .workspace{flex:1;min-height:0;height:auto}
+:root[data-journal-mode=static] .app-header,:root[data-journal-mode=static] footer{flex-shrink:0}
+#browser-storage:not([hidden]){display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 18px;border-top:1px solid var(--line);background:var(--page);font-size:12px}
+#browser-storage span{flex:1;min-width:180px}
+[hidden]{display:none!important}

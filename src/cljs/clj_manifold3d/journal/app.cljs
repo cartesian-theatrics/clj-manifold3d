@@ -7,6 +7,8 @@
             [clj-manifold3d.journal.generation :as gen]
             [clj-manifold3d.journal.context-ui :as context-ui]
             [clj-manifold3d.journal.viewer :as viewer-data]
+            [clj-manifold3d.journal.browser-store :as browser-store]
+            [clj-manifold3d.journal.transport :as transport]
             [cljs.reader :as reader]
             [clojure.string :as str]
             [goog.object :as gobj]))
@@ -35,14 +37,7 @@
   (let [el (node "button" "action")]
     (text! el label) (.setAttribute el "title" title) (.setAttribute el "aria-label" title)
     (.addEventListener el "click" (fn [e] (.stopPropagation e) (f))) el))
-(defn api [method path data]
-  (-> (js/fetch path (clj->js (cond-> {:method method :headers {"Content-Type" "application/json"}}
-                               data (assoc :body (js/JSON.stringify (clj->js data))))))
-      (.then (fn [response]
-               (-> (.json response)
-                   (.then (fn [body]
-                            (if (.-ok response) (js->clj body :keywordize-keys true)
-                                (throw (js/Error. (gobj/get body "error")))))))))))
+(def api transport/api)
 (defn content [document] (dissoc document :revision))
 (defn acknowledged [namespace]
   (:document/saved-content (state/pull '[:document/saved-content] [:document/id namespace])))
@@ -140,6 +135,7 @@
 (defn prompt-codex!
   ([namespace prompt-id] (prompt-codex! namespace prompt-id nil))
   ([namespace prompt-id prepared]
+  (if (transport/static?) (status! "AI prompting requires the local server-backed journal.")
   (when-not (some #(and (= prompt-id (:prompt-block %)) (gen/active? %)) (state/requests))
     (when-let [request (state/begin-request! namespace prompt-id prepared)]
       ;; Save the anchor before launching. Serializing with ordinary saves avoids
@@ -165,7 +161,7 @@
                                 (cancel-codex! (:id r)))
                               (poll-request! (:id r)))))
                    (.catch (fn [e]
-                             (state/request! (assoc request :status "error" :error (.-message e))))))))))))
+                             (state/request! (assoc request :status "error" :error (.-message e)))))))))))))
 (defn cancel-codex! [id]
   (-> (api "POST" (str "/api/codex/requests/" id "/cancel") {})
       (.then accept-request!)
@@ -200,7 +196,7 @@
         (state/transact! [[:db/retractEntity (:db/id result)]]))
       (state/transact! (mapv #(hash-map :result/id (:id %) :result/status "running") targets))
       (state/workspace! {:ui/request-id id :ui/request-document (pr-str document)})
-      (reset! evaluation-timer (js/setTimeout stop! 30000))
+      (reset! evaluation-timer (js/setTimeout stop! 300000))
       (.postMessage @worker (clj->js {:id id :namespace namespace :blocks (:blocks document)
                                       :target target :selection selection :all all?
                                       :documents (state/documents)})))))
@@ -229,7 +225,7 @@
 
 (defn start-worker! []
   (state/workspace! {:ui/engine "starting"})
-  (let [w (js/Worker. "/journal/worker/worker.js")]
+  (let [w (js/Worker. (transport/asset-url "worker/worker.js"))]
     (reset! worker w)
     (set! (.-onerror w) (fn [e] (state/workspace! {:ui/engine (str "Engine error: " (.-message e))})))
     (set! (.-onmessage w)
@@ -552,11 +548,12 @@
               (.setAttribute message "role" "status") (append! result message))
             (append! root result)))
       (do
-        (append! toolbar (action "✦ Prompt Codex" "Send prose to Codex · Ctrl/Cmd+Enter (prose)" #(prompt-codex! namespace id))
-                 (action "Context…" "Choose targets, references and pinned instructions · Ctrl+Alt+K (prose)" #(context-ui/open! namespace id)))
-        (let [hint (node "div" "prompt-hint")]
-          (text! hint "Context… controls which panels and definitions are available. Codex tests its code, repairs failures, and shows verified results automatically.")
-          (append! root hint))
+        (when-not (transport/static?)
+          (append! toolbar (action "✦ Prompt Codex" "Send prose to Codex · Ctrl/Cmd+Enter (prose)" #(prompt-codex! namespace id))
+                   (action "Context…" "Choose targets, references and pinned instructions · Ctrl+Alt+K (prose)" #(context-ui/open! namespace id)))
+          (let [hint (node "div" "prompt-hint")]
+            (text! hint "Context… controls which panels and definitions are available. Codex tests its code, repairs failures, and shows verified results automatically.")
+            (append! root hint)))
         (doseq [[label command shortcut] [["B" "bold" "Ctrl/Cmd+B"] ["I" "italic" "Ctrl/Cmd+I"]
                                         ["H2" "heading" "Ctrl/Cmd+Alt+2"] ["¶" "paragraph" "Ctrl/Cmd+Alt+0"]
                                         ["• List" "list" "Ctrl/Cmd+Shift+8"] ["<>" "code" "Ctrl/Cmd+`"]]]
@@ -753,7 +750,7 @@
                                     "t" #(add-block! pane namespace id "prose")
                                     "h" #(when id (toggle-panel! namespace id))
                                     "z" #(undo-delete! pane namespace)
-                                    "k" #(when (= "prose" (:block/kind (state/pull '[:block/kind] [:block/id id])))
+                                    "k" #(when (and (not (transport/static?)) (= "prose" (:block/kind (state/pull '[:block/kind] [:block/id id]))))
                                             (context-ui/open! namespace id))
                                     "backspace" #(when id (delete-panel! pane namespace id)) nil)
                    (and alt (not ctrl) id) (case key "ArrowUp" #(do (state/move-block! namespace id -1) (persist!))
@@ -787,6 +784,29 @@
     (set! (.-disabled (by-id "refresh-codex-models")) (boolean (:codex/loading? catalog)))
     (text! (by-id "codex-model-status") (if (:codex/loading? catalog) "Loading available models…" (:codex/error catalog "")))))
 
+(defn export-backup! []
+  (let [data (browser-store/backup (state/documents) (state/workspace-data))
+        url (.createObjectURL js/URL (js/Blob. #js [(pr-str data)] #js {:type "application/edn"}))
+        link (node "a" "")]
+    (set! (.-href link) url) (set! (.-download link) "modeling-journal.edn")
+    (.click link)
+    (js/setTimeout #(.revokeObjectURL js/URL url) 1000)))
+
+(defn import-backup! [file]
+  (when file
+    (if (> (.-size file) (* 20 1024 1024)) (status! "Backup is larger than the 20 MB import limit.")
+      (-> (.text file)
+          (.then (fn [text]
+                   (let [{:keys [documents]} (browser-store/read-backup (reader/read-string text))
+                         current (into {} (map (juxt :namespace identity)) (state/documents))
+                         merged (vals (reduce #(assoc %1 (:namespace %2) %2) current documents))]
+                     (browser-store/validate-documents! (vec merged))
+                     (when (js/confirm (str "Import " (count documents) " documents? Matching namespaces will be replaced. Other documents and your pane layout will be kept. Export a backup first to keep existing edits."))
+                       (state/import-documents!
+                        (mapv #(assoc % :revision (:revision (get current (:namespace %)) 0)) documents))
+                       (persist!)))))
+          (.catch #(status! (str "Import failed: " (.-message %))))))))
+
 (defn main []
   ;; Dialog visibility and unsaved form fields are app state too. The DOM is
   ;; only a projection of these facts, not a second source of truth.
@@ -807,6 +827,14 @@
                           (context-ui/clear-inspection!) (persist!)))
   (.addEventListener (by-id "vim-toggle") "click" #(do (state/workspace! {:workspace/vim? (not (:workspace/vim? (state/workspace)))}) (persist!)))
   (.addEventListener js/document "keydown" global-keys!)
+  (when (transport/static?)
+    (set! (.-hidden (by-id "browser-storage")) false)
+    (set! (.-hidden (qs js/document ".codex-model-controls")) true)
+    (.addEventListener (by-id "export-backup") "click" export-backup!)
+    (.addEventListener (by-id "import-backup") "click" #(.click (by-id "backup-file")))
+    (.addEventListener (by-id "backup-file") "change"
+                       (fn [_] (import-backup! (aget (.-files (by-id "backup-file")) 0))
+                         (set! (.-value (by-id "backup-file")) ""))))
   (-> (api "GET" "/api/state" nil)
       (.then
        (fn [snapshot]
@@ -844,8 +872,9 @@
          (swap! subscriptions conj
                 (state/subscribe! '[:find (pull ?c [*]) . :where [?c :codex/id "default"]] render-models!)
                 (state/subscribe! '[:find ?model . :where [?w :workspace/id "default"] [?w :workspace/codex-model ?model]] render-models!))
-         (refresh-models!)
-         (poll-sessions!)
+         (when-not (transport/static?)
+           (refresh-models!)
+           (poll-sessions!))
          (doseq [request (sort-by :created > (state/requests))]
            (accept-request! request)
            (when (gen/active? request) (poll-request! (:id request))))

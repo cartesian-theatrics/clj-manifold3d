@@ -61,6 +61,23 @@
   (assoc (workspace-data) :library (reader/read-string (:library/catalog (pull '[:library/catalog] [:library/id "built-in"]) "{}"))))
 
 (defn put-document! [document] (transact! (doc/entity-tx document)))
+(defn import-documents!
+  "Replace imported documents atomically, preserving save baselines and panes.
+  Retract old multi-valued refs and previews, including panels absent in backup."
+  [incoming]
+  (transact!
+   (vec (concat
+         (mapcat (fn [{:keys [namespace]}]
+                   (let [old (document namespace) entity (pull '[*] [:document/id namespace])]
+                     (concat
+                      (for [b (:blocks old)] [:db/retractEntity [:block/id (:id b)]])
+                      (for [b (ns-form/panels old) :when (pull '[:result/id] [:result/id (:id b)])]
+                        [:db/retractEntity [:result/id (:id b)]])
+                      (for [attr [:document/instructions :document/instructions-mode :document/deleted-panels
+                                  :document/applied-requests]
+                            :when (contains? entity attr)]
+                        [:db/retractAttribute (:db/id entity) attr])))) incoming)
+         (mapcat doc/entity-tx incoming)))))
 (defn request [id] (gen/from-entity (pull '[*] [:request/id id])))
 (defn requests []
   (mapv gen/from-entity (q '[:find [(pull ?r [*]) ...] :where [?r :request/id]])))

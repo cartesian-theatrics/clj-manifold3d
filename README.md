@@ -1195,6 +1195,57 @@ build in Chromium with an isolated temporary Datahike database.
 `npm run test:journal:state` verifies DataScript subscriptions and the shared
 `.cljc` document/schema tests under advanced optimization.
 
+## Browser-only journal / GitHub Pages
+
+The [hosted journal](https://cartesian-theatrics.github.io/clj-manifold3d/journal/)
+uses the same editor, DataScript schema/subscriptions, SCI worker and native
+WASM geometry engine, without a Clojure server. Its initial library contains
+only **Castle · night scene**, its **Castle · architecture** namespace dependency,
+and **American flag · surface UV**. Choose **Run page** to evaluate a document;
+the full castle can take 30 seconds or more, depending on the device.
+
+Edits, panel deletion history, viewer settings, and splits persist in IndexedDB
+on that browser and origin. DataScript remains the sole live application database.
+Closing a tab loses evaluation results, not saved source; re-run to recreate them.
+Clearing browser storage (or ending a private browsing session) can erase edits:
+use **Export backup** to download an EDN snapshot. **Import backup** validates it
+and asks before replacing matching namespaces; other documents and the current
+pane layout are kept. Conflicting document saves from another tab are rejected,
+with an instruction to export unsaved edits before reloading. There is no cloud
+sync, filesystem mirror, login, or AI prompting in this edition. Namespace imports
+resolve other browser documents. The local server edition still uses Datahike,
+writes `.clj` namespace files, and supports Codex.
+
+To build from source, install Node/npm, Clojure CLI, CMake and Emscripten. Use the
+extended bindings from `cartesian-theatrics/manifold` (commit `72c71d4d` or a
+compatible newer revision) in `../manifold`, or set `MANIFOLD_SOURCE`:
+
+```sh
+npm ci
+npm run build:wasm
+npm run build:journal:static
+npm run test:journal:static
+```
+
+The build prints a fresh `target/journal-static-*` directory; its absolute path
+is also in `target/journal-static-path`. Serve that directory with any static
+HTTP host, or upload its contents as a Pages artifact. The root links to
+`journal/`; all app and WASM URLs are relative, including under a repository
+subdirectory. Use HTTP(S), not `file://`. Only an explicit public-asset allowlist
+is copied: **never upload the repository, `data/`, local journals, or credentials**.
+The published site is served from the `gh-pages` branch; source stays on
+`3d-journal`. Building the static artifact does not switch the local app into
+static mode or modify its database.
+
+`test:journal:static` serves the production bundle under a nested path with no
+API server and checks both complete examples, namespace imports, GLB export,
+backups, reload persistence, and conflicting tabs. Set `JOURNAL_STATIC_URL` to
+exercise a deployed static site instead (test documents stay in an isolated
+browser profile). Shared `.cljc` tests cover snapshot validation and revision
+transactions; `test:journal:state` also covers replacement imports in DataScript.
+
+## Editor and panels
+
 - Ctrl/Cmd+Enter evaluates the selection or form at the cursor;
   Ctrl/Cmd+Shift+E evaluates the enclosing top-level form.
   Ctrl/Cmd+Shift+Enter splits the code block at the exact cursor position and
