@@ -1,47 +1,81 @@
-name: Clojure Tests
+name: Library release checks
 
 on:
   push:
-    branches: [ main ]
+    branches: [main, master]
   pull_request:
-    branches: [ main ]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      revision:
+        description: Exact wrapper commit to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
-  test:
-
-    runs-on: ubuntu-latest
-
+  library:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
     steps:
-    - uses: actions/checkout@v2
-
-    - name: Set up JDK 17
-      uses: actions/setup-java@v2
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-
-    - name: Install clojure tools
-      uses: DeLaGuardo/setup-clojure@12.5
-      with:
-        cli: 1.11.2.1446             # Clojure CLI based on tools.deps
-        clj-kondo: 2022.05.31
-        cljfmt: 0.10.2
-        cljstyle: 0.15.0
-        cmd-exe-workaround: 'latest'
-        zprint: 1.2.3
-
-    - name: Cache clojure dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.m2/repository
-          ~/.gitlibs
-          ~/.deps.clj
-        key: cljdeps-${{ hashFiles('deps.edn') }}
-        restore-keys: cljdeps-
-
-    - name: Install libassimp
-      run: sudo apt-get update && sudo apt-get install -y libassimp-dev
-
-    - name: Run tests
-      run: clojure -M:dev:test
+      - uses: actions/checkout@v4
+        with:
+          repository: cartesian-theatrics/clj-manifold3d
+          ref: ${{ inputs.revision || github.sha }}
+      - uses: actions/checkout@v4
+        with:
+          repository: cartesian-theatrics/manifold
+          ref: 0e67c79c6b91be8e85a0cf4622fc8576528070cf
+          path: native
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: 1.12.0.1530
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: lukka/get-cmake@v4.2.3
+        with:
+          cmakeVersion: 3.31.6
+      - name: Install runtime and browser dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libassimp-dev
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Build matching WASM runtime
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install 3.1.64
+          "$RUNNER_TEMP/emsdk/emsdk" activate 3.1.64
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          MANIFOLD_SOURCE="$PWD/native" bash scripts/build-wasm.sh
+      - name: Package library and verify journal exclusion
+        run: |
+          python3 scripts/build-release.py
+          python3 scripts/prepare-release-test.py
+      - name: Test packaged Clojure library against published JNI
+        working-directory: target/release-test
+        run: |
+          clojure -M:native scripts/shared-tests.clj
+          clojure -M:native scripts/jvm-regression-tests.clj
+          clojure -M:native scripts/jvm-parity-fixtures.clj
+      - name: Test packaged ClojureScript library in Node and browser
+        working-directory: target/release-test
+        run: |
+          npm run test:cljs
+          npm run test:advanced
+          npm run test:browser
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clj-manifold3d-release
+          path: |
+            target/clj-manifold3d-*.jar
+            target/clj-manifold3d-*.pom
+          if-no-files-found: error

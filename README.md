@@ -11,9 +11,9 @@ It implements most of the library functionality, plus extends it to support poly
 
 This checkout targets upstream **v3.5.3** (`0edd9d54876f3135e431575214dd6d8a72866fee`)
 plus this project's native extensions (fork integration commit `d8778ce9`).
-Use matching, freshly built JNI and WASM
-bindings from the sibling `manifold` checkout. The published versions in the
-Install examples below predate these additions.
+Release **1.2.0** uses native bindings **2.2.0**. The JAR includes matching
+WASM assets at `clj_manifold3d/wasm/manifold.js` and `manifold.wasm`;
+copy these to your web server and initialize the CLJS runtime as below.
 
 Both CLJ and CLJS now expose:
 
@@ -73,16 +73,35 @@ The stable release was selected to preserve the existing fill rules, tolerance,
 and smoothing APIs; post-release upstream development removes some of them.
 See the sibling fork's `UPSTREAM_UPDATE.md` for the native integration details.
 
+## Release packaging
+
+`version.txt` and `pom.xml` define the library release version. After building
+matching WASM with `npm run build:wasm`, run `python3 scripts/build-release.py`.
+The release JAR contains only the top-level CLJ/CLJC/CLJS library namespaces,
+WASM runtime, Maven metadata and `deps.cljs` (the `fast-png` npm dependency).
+Journal namespaces, editors, UI assets, examples and journal-only dependencies
+are excluded. Development aliases and journal applications remain available
+in the source checkout.
+
+`python3 scripts/prepare-release-test.py` creates an isolated consumer project
+under `target/release-test`; CI runs JVM regressions and CLJS Node/browser tests
+there against the packaged JAR and published JNI 2.2.0. Publishing uses the
+Manifold repository's manually dispatched `clj-library-release.yml` workflow,
+which builds an exact wrapper commit and uploads only its tested JAR and POM.
+
 # Install
 
 You need include the native [Manifold Bindings](https://github.com/SovereignShop/manifold) for your platform separately. For example:
 
 ``` clojure
 ;; Linux
-{:deps {org.clojars.cartesiantheatrics/manifold3d$linux-x86_64 {:mvn/version "1.0.73"}}}
-;; Mac
-{:deps {org.clojars.cartesiantheatrics/manifold3d$mac-x86_64 {:mvn/version "1.0.73"}}}
-;; See build artifacts for experimental Windows jars: https://github.com/SovereignShop/manifold/actions
+{:deps {org.clojars.cartesiantheatrics/clj-manifold3d {:mvn/version "1.2.0"}
+        org.clojars.cartesiantheatrics/manifold3d$linux-x86_64 {:mvn/version "2.2.0"}}}
+;; Intel Mac (TBB); install assimp and tbb with Homebrew.
+{:deps {org.clojars.cartesiantheatrics/clj-manifold3d {:mvn/version "1.2.0"}
+        org.clojars.cartesiantheatrics/manifold3d$mac-TBB-x86_64 {:mvn/version "2.2.0"}}}
+;; Linux with parallel execution: choose manifold3d$linux-TBB-x86_64 and install libtbb12.
+;; This release has no Windows or Apple Silicon native artifact.
 ```
 
 The Manifold .so libs are included in the bindings jar. You'll also need to have libassimp installed on your system:

@@ -55,5 +55,6 @@
              :main-opts   ["-m" "kaocha.runner"]}
 
   :clj-deploy
-  {:main-opts   ["-m" "deploy"]
+  {:extra-paths ["build"]
+   :main-opts   ["-m" "deploy"]
    :extra-deps {org.clojure/clojure {:mvn/version "1.11.0"}}}}}

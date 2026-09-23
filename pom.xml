@@ -1,91 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-        
-  
-  
-  <licenses>
-                  
-    
-    
-    <license>
-                            
-      
-      
-      <name>The Apache Software License, Version 2.0</name>
-                            
-      
-      
-      <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
-                            
-      
-      
-      <distribution>repo</distribution>
-                            
-      
-      
-      <comments>A business-friendly OSS license</comments>
-                        
-    
-    
-    </license>
-              
-  
-  
-  </licenses>
-        
-  
-  
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-        
-  
-  
   <groupId>org.clojars.cartesiantheatrics</groupId>
-        
-  
-  
   <artifactId>clj-manifold3d</artifactId>
-        
-  
-  
-  <scm>
-                
-    
-    
-    <url>https://github.com/SovereignShop/clj-manifold3d.git</url>
-                
-    
-    
-    <connection>scm:git:git://github.com/SovereignShop/clj-manifold3d</connection>
-                
-    
-    
-    <developerConnection>scm:git:ssh://git@github.com/SovereignShop/clj-manifold3d</developerConnection>
-                
-    
-    
-    <tag>0.0.8</tag>
-              
-  
-  
-  </scm>
-        
-  
-  
-  <version>1.1.1</version>
-        
-  
-  
-  <dependencies/>
-        
-  
-  
-  <repositories>
-    <repository>
-      <id>clojars</id>
-      <url>https://repo.clojars.org/</url>
-    </repository>
-  </repositories>
-      
-
-
+  <version>1.2.0</version>
+  <name>clj-manifold3d</name>
+  <description>Clojure and ClojureScript geometry, textures, scenes and animation for Manifold.</description>
+  <url>https://github.com/cartesian-theatrics/clj-manifold3d</url>
+  <licenses><license><name>The Apache Software License, Version 2.0</name><url>https://www.apache.org/licenses/LICENSE-2.0.txt</url><distribution>repo</distribution></license></licenses>
+  <scm><url>https://github.com/cartesian-theatrics/clj-manifold3d</url><connection>scm:git:https://github.com/cartesian-theatrics/clj-manifold3d.git</connection><tag>HEAD</tag></scm>
+  <dependencies>
+    <dependency><groupId>org.clojure</groupId><artifactId>clojure</artifactId><version>1.12.0</version></dependency>
+    <dependency><groupId>org.clojure</groupId><artifactId>data.json</artifactId><version>2.4.0</version></dependency>
+  </dependencies>
+  <repositories><repository><id>clojars</id><url>https://repo.clojars.org/</url></repository></repositories>
 </project>

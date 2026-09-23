@@ -1,0 +1,4 @@
+The bundled WebAssembly runtime is built from Manifold 3.5.3 with this project's extensions.
+Portions of this software are copyright © 1996-2024 The FreeType Project (www.freetype.org). All rights reserved.
+Clipper2 is distributed under the Boost Software License.
+Emscripten runtime licensing is included in Emscripten.txt.
