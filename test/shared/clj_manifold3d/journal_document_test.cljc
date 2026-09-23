@@ -4,9 +4,56 @@
             [clj-manifold3d.journal.schema :as schema]
             [clj-manifold3d.journal.viewer :as viewer]
             [clj-manifold3d.journal.namespace :as ns-form]
+            [clj-manifold3d.journal.example-format :as example-format]
             #?(:clj [clj-manifold3d.journal.example-source :as example-source])
+            #?(:clj [clojure.pprint :as pprint])
             #?(:clj [clojure.test :refer [deftest is testing]]
                :cljs [cljs.test :refer-macros [deftest is testing]])))
+
+(deftest refresh-only-old-example-formatting
+  (let [night (first (filter #(= "journal.castle-night" (:namespace %)) (doc/examples)))
+        camera (last (:blocks night))
+        bad (-> (:source camera)
+                (str/replace "(def camera-track" "(def\n camera-track")
+                (str/replace "(defn assembly" "(defn\n assembly"))
+        old (assoc-in night [:blocks (dec (count (:blocks night))) :source] bad)]
+    (is (= [{:id (:id camera) :source (:source camera)}] (example-format/updates [old])))
+    (is (empty? (example-format/updates [night])))
+    (is (empty? (example-format/updates [(update old :blocks pop)])) "Never restore deleted panels")
+    (is (empty? (example-format/updates [(assoc old :namespace "my.castle")])))
+    (doseq [source [(str bad "\n;; My note")
+                    (str/replace bad "(range 41)" "(range 81)")
+                    (str/replace bad "A wish over the castle" "A wish  over the castle")]]
+      (is (empty? (example-format/updates
+                   [(assoc-in old [:blocks (dec (count (:blocks old))) :source] source)]))
+          "Keep code, comments and string contents exactly as edited"))))
+
+(deftest formatting-refresh-preserves-reader-token-boundaries
+  (let [document (fn [source] {:namespace "journal.castle-night"
+                               :blocks [{:id "test" :kind "code" :source source}]})
+        fresh "(def sample {:s \"a b; c\" :chars [\\space \\; \\\\ \\\"] :v [foo bar]})"]
+    (with-redefs [doc/examples (fn [] [(document fresh)])]
+      (is (= [{:id "test" :source fresh}]
+             (example-format/updates [(document (str/replace fresh "(def sample" "(def\n sample"))])))
+      (doseq [edited [(str/replace fresh "foo bar" "foobar")
+                      (str/replace fresh "a b; c" "ab; c")
+                      (str/replace fresh "\\space" "\\newline")]]
+        (is (empty? (example-format/updates
+                     [(document (str/replace edited "(def sample" "(def\n sample"))])))))))
+
+#?(:clj
+   (deftest upgrades-the-original-data-printer-camera-panel
+     (let [old (with-redefs-fn
+                 {#'example-source/code
+                  (fn [form]
+                    (str/trim (with-out-str
+                                (binding [pprint/*print-right-margin* 88]
+                                  (pprint/pprint form)))))}
+                 example-source/castle-documents)
+           updates (into {} (map (juxt :id :source)) (example-format/updates old))]
+       (is (re-find #"\(defn\n assembly" (:source (last (:blocks (second old))))))
+       (is (re-find #"\(def camera-track\n" (get updates "journal-castle-night-camera" "")))
+       (is (re-find #"\(defn assembly\n" (get updates "journal-castle-night-camera" ""))))))
 
 (deftest castle-examples-are-editable-linked-source
   (let [examples (into {} (map (juxt :namespace identity) (doc/examples)))

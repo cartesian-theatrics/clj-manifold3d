@@ -2,6 +2,7 @@
   (:refer-clojure :exclude [run!])
   (:require [clj-manifold3d.journal.state :as state]
             [clj-manifold3d.journal.document :as doc]
+            [clj-manifold3d.journal.example-format :as example-format]
             [clj-manifold3d.journal.namespace :as ns-form]
             [clj-manifold3d.journal.verification :as verification]
             [clj-manifold3d.journal.generation :as gen]
@@ -890,5 +891,14 @@
          (doseq [request (sort-by :created > (state/requests))]
            (accept-request! request)
            (when (gen/active? request) (poll-request! (:id request))))
+         ;; Saved example text predates the code formatter. Patch only layout
+         ;; when every token still matches the current example, through the same
+         ;; DataScript/save path as an edit; concurrent writers retain revision
+         ;; checks and panels owned by an active AI request remain untouched.
+         (let [updates (remove #(state/owner (:id %))
+                               (example-format/updates (state/documents)))]
+           (when (seq updates)
+             (doseq [{:keys [id source]} updates] (state/source! id source))
+             (persist!)))
          (start-worker!)))
       (.catch #(do (text! (by-id "engine") "Could not open journal") (text! (by-id "save-status") (.-message %))))))

@@ -10,6 +10,7 @@
     "build:journal": "esbuild src/js/clj_manifold3d/journal_editor.js --bundle --minify --format=esm --target=es2020 --outfile=public/journal/js/editor.js && esbuild src/js/clj_manifold3d/journal_viewer.js --bundle --minify --format=esm --target=es2020 --outfile=public/journal/js/viewer.js && shadow-cljs release journal journal-worker",
     "build:journal:static": "npm run build:journal && node scripts/build-journal-static.cjs",
     "test:journal:static": "node scripts/test-journal-static.cjs",
+    "test:journal:formatting": "node scripts/test-journal-formatting.cjs",
     "serve:try-it": "node scripts/serve-try-it.cjs",
     "build:castle": "clojure -M:clj-dev -m fairytale-castle-night target/fairytale-castle-night.glb",
     "serve:castle": "node scripts/serve-castle.cjs",

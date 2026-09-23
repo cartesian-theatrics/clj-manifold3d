@@ -3,6 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
+const {createHash} = require('node:crypto');
 
 (async () => {
   const files = [
@@ -21,6 +22,15 @@ const {execFileSync} = require('node:child_process');
       ? bytes.toString().replace('<html lang="en">', '<html lang="en" data-journal-mode="static">')
       : bytes);
   }
+  // Saved journals are independent of asset versions. A new HTML response must
+  // load the matching example catalog even when the browser has cached old JS.
+  const index = path.join(output, 'journal/index.html');
+  let html = await fs.readFile(index, 'utf8');
+  for (const file of ['style.css', 'js/editor.js', 'js/viewer.js', 'js/main.js']) {
+    const digest = createHash('sha256').update(await fs.readFile(path.join(output, 'journal', file))).digest('hex').slice(0, 16);
+    html = html.replaceAll(`./${file}`, `./${file}?v=${digest}`);
+  }
+  await fs.writeFile(index, html);
   await fs.writeFile(path.join(output, '.nojekyll'), '');
   await fs.writeFile(path.join(output, 'index.html'), '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="refresh" content="0;url=./journal/"><title>Modeling Journal</title><a href="./journal/">Open the Modeling Journal</a></html>\n');
   await fs.writeFile(path.join(output, 'build.json'), JSON.stringify({
