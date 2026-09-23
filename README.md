@@ -111,31 +111,6 @@ and build the matching WASM bindings as described below. Java/JNI dependencies
 are not required by CLJS applications. Old generated loaders under `src/js`
 and the original viewer prototype are not used by the current bindings.
 
-## scad-etc construction patterns
-
-`clj-manifold3d.builders` is a small `.cljc` namespace for patterns that recur
-in the native portions of `scad-etc`; it is intentionally not a second general
-modeling DSL. It packages batched `fuse`, `cut`, and `hull`, translated-copy
-helpers (`copies-at`, `fuse-at`, `hull-at`), `disks-at`, rectangular
-`bolt-pattern`, 2D `capsule`, 3D `rod-between`/`rods-between`, hollow `tube`,
-and `torus`.
-
-```clojure
-(require '[clj-manifold3d.core :as m]
-         '[clj-manifold3d.builders :as b])
-
-(let [holes (b/disks-at (/ hole-diameter 2) hole-centers facets)
-      plate (b/cut (m/square plate-width plate-height true) holes)
-      rods (b/rods-between (map (juxt :start :end) rod-specs)
-                           (/ rod-diameter 2) facets)]
-  (b/fuse (m/extrude plate plate-thickness) rods))
-```
-
-These helpers came from repeated `apply m/union`, translated-circle fields,
-slot hulls, and duplicated point-to-point rod frames in `scad-etc`. They keep
-the normal immutable `m/*` values, so a result can continue through `->`,
-boolean operations, appearance functions, or export.
-
 ## ClojureScript / WASM
 
 ### Local “Try it!” playground
