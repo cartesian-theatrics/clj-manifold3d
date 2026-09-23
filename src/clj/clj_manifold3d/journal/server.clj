@@ -197,12 +197,11 @@
     (doseq [document (doc/examples)] (save-document! (:namespace document) document)))
   ;; Add the new example to existing libraries, never reset an edited example.
   (doseq [example (doc/examples)
-          :when (and (#{"journal.flag-uv" "journal.castle-architecture" "journal.castle-night"} (:namespace example))
+          :when (and (doc/curated-namespaces (:namespace example))
                      (not (document (:namespace example))))]
     (save-document! (:namespace example) example))
   (when (empty? (:panes (workspace)))
-    (save-workspace! {:vim false :active-pane "pane-first"
-                      :panes [{:id "pane-first" :document "journal.first-shapes" :width 1}]}))
+    (save-workspace! {:vim false :active-pane "pane-night" :panes doc/castle-panes}))
   ;; Repair projections after interruption between database commit and file move.
   (doseq [document (documents)] (materialize! document)))
 

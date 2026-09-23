@@ -27,6 +27,11 @@ async function until(f, timeout=60000) {
   const stop=async()=>{if(server&&server.exitCode===null){const done=new Promise(r=>server.once('exit',r));server.kill('SIGTERM');await done;}};
   try {
     await start();
+    // Interaction tests use the compact solids fixture, independently of the
+    // application's castle split-view welcome layout.
+    const layout=await fetch(url+'/api/workspace',{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({vim:false,'active-pane':'pane-first',panes:[{id:'pane-first',document:'journal.first-shapes',width:1}]})});
+    assert.equal(layout.status,200);
     browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH,args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});
     const page=await browser.newPage({viewport:{width:1480,height:1100},acceptDownloads:true});
     const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('Browser error:',e.message);});
@@ -113,11 +118,12 @@ async function until(f, timeout=60000) {
     console.log('PASS: require another document; pivot animation visibly changes transforms');
 
     await page.locator('[data-document="journal.flag-uv"]').click();await runPage();
-    assert.match(await page.locator('.result-label').innerText(),/Model · volume/);
-    await page.locator('.solid-preview').scrollIntoViewIfNeeded();
-    await page.waitForFunction(()=>document.querySelector('.solid-preview')?.dataset.loaded==='true');
+    assert.match(await page.locator('.result-label').last().innerText(),/Model · volume/);
+    const flagPreview=page.locator('.solid-preview').last();
+    await flagPreview.scrollIntoViewIfNeeded();
+    await page.waitForFunction(el=>el.dataset.loaded==='true',await flagPreview.elementHandle());
     const flagDownload=page.waitForEvent('download');
-    await page.getByRole('button',{name:'Download this result as GLB · Ctrl+Alt+D',exact:true}).click();
+    await flagPreview.locator('..').getByRole('button',{name:'Download this result as GLB · Ctrl+Alt+D',exact:true}).click();
     const flagBytes=await fs.readFile(await (await flagDownload).path());
     const flagGLB=await new NodeIO().readBinary(flagBytes);
     assert.ok(flagGLB.getRoot().listTextures().some(t=>t.getImage()?.length>1000),'GLB embeds the flag image');

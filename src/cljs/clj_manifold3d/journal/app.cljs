@@ -807,6 +807,17 @@
                        (persist!)))))
           (.catch #(status! (str "Import failed: " (.-message %))))))))
 
+(defn update-examples! []
+  (if (or (= "running" (:ui/engine (state/workspace))) (some gen/active? (state/requests)))
+    (status! "Stop evaluation and AI requests before updating examples.")
+    (when (js/confirm "Replace the castle, flag and README examples with their latest walkthroughs, and open the castle split view? A backup of all current documents will download first. Other documents are kept.")
+      (export-backup!)
+      (state/import-documents!
+       (mapv #(assoc % :revision (:revision (state/document (:namespace %)) 0))
+             (filter #(doc/curated-namespaces (:namespace %)) (doc/examples))))
+      (state/open-castle-panes!)
+      (persist!))))
+
 (defn main []
   ;; Dialog visibility and unsaved form fields are app state too. The DOM is
   ;; only a projection of these facts, not a second source of truth.
@@ -819,6 +830,7 @@
   (doseq [[id attr] [["document-name" :ui/draft-namespace] ["document-title" :ui/draft-title]]]
     (.addEventListener (by-id id) "input" #(state/workspace! {attr (.-value (by-id id))})))
   (.addEventListener (by-id "new-document") "click" create-document!)
+  (.addEventListener (by-id "update-examples") "click" update-examples!)
   (.addEventListener (by-id "document-form") "submit" new-document-submit!)
   (.addEventListener (by-id "stop") "click" stop!)
   (.addEventListener (by-id "refresh-codex-models") "click" refresh-models!)

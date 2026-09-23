@@ -1200,9 +1200,22 @@ build in Chromium with an isolated temporary Datahike database.
 The [hosted journal](https://cartesian-theatrics.github.io/clj-manifold3d/journal/)
 uses the same editor, DataScript schema/subscriptions, SCI worker and native
 WASM geometry engine, without a Clojure server. Its initial library contains
-only **Castle · night scene**, its **Castle · architecture** namespace dependency,
-and **American flag · surface UV**. Choose **Run page** to evaluate a document;
-the full castle can take 30 seconds or more, depending on the device.
+**Castle · night scene**, **Castle · architecture**, **American flag · surface UV**,
+and **Library · README walkthrough**. The two castle documents open side by side
+by default. Choose **Run page** to evaluate a document; every modeling block
+returns a shape or scene, showing the construction stages rather than only the
+finished assembly. The full castle can take a minute or more, depending on the device.
+
+The README journal has 23 runnable panels covering booleans, cross-sections,
+extrusion, offsets, revolution, hulls, polyhedra, frames, three loft styles,
+slicing, height fields, colors, composition, circles/arcs, vertices/halfedges,
+texturing and a lit animated scene. File/font-dependent examples are explained
+but not executed in the browser-only runtime.
+
+Existing journals and pane layouts are kept on reload. **Update examples**
+downloads a backup before replacing the four bundled examples and restoring
+the castle split view (after confirmation). Other documents are untouched.
+Newly introduced examples are added automatically without replacing saved ones.
 
 Edits, panel deletion history, viewer settings, and splits persist in IndexedDB
 on that browser and origin. DataScript remains the sole live application database.
@@ -1238,7 +1251,7 @@ The published site is served from the `gh-pages` branch; source stays on
 static mode or modify its database.
 
 `test:journal:static` serves the production bundle under a nested path with no
-API server and checks both complete examples, namespace imports, GLB export,
+API server and checks every walkthrough panel, namespace imports, GLB export,
 backups, reload persistence, and conflicting tabs. Set `JOURNAL_STATIC_URL` to
 exercise a deployed static site instead (test documents stay in an isolated
 browser profile). Shared `.cljc` tests cover snapshot validation and revision

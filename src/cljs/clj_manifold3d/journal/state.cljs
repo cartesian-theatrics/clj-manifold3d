@@ -61,6 +61,11 @@
   (assoc (workspace-data) :library (reader/read-string (:library/catalog (pull '[:library/catalog] [:library/id "built-in"]) "{}"))))
 
 (defn put-document! [document] (transact! (doc/entity-tx document)))
+(defn open-castle-panes! []
+  (transact! (vec (concat (map #(vector :db/retractEntity [:pane/id (:pane/id %)]) (panes))
+                         (map-indexed (fn [i p] {:pane/id (:id p) :pane/order i :pane/width (:width p)
+                                                :pane/document [:document/id (:document p)]}) doc/castle-panes)
+                         [{:workspace/id "default" :workspace/active-pane "pane-night"}]))))
 (defn import-documents!
   "Replace imported documents atomically, preserving save baselines and panes.
   Retract old multi-valued refs and previews, including panels absent in backup."

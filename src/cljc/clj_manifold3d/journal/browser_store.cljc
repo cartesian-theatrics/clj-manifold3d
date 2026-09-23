@@ -4,15 +4,17 @@
   (:require [clj-manifold3d.journal.document :as doc]
             [clj-manifold3d.journal.namespace :as ns-form]))
 
-(def example-namespaces
-  #{"journal.castle-architecture" "journal.castle-night" "journal.flag-uv"})
+(def example-namespaces doc/curated-namespaces)
 
 (defn seed []
   {:documents (mapv #(assoc % :revision 0) (filter #(example-namespaces (:namespace %)) (doc/examples)))
    :workspace {:vim false :instructions "" :codex-model ""
-               :active-pane "pane-first"
-               :panes [{:id "pane-first" :document "journal.castle-night" :width 1}]}
+               :active-pane "pane-night" :panes doc/castle-panes}
    :requests [] :library "{}"})
+
+(defn add-missing-examples [snapshot]
+  (let [existing (set (map :namespace (:documents snapshot)))]
+    (update snapshot :documents into (remove #(existing (:namespace %)) (:documents (seed))))))
 
 (defn validate-documents! [documents]
   (when-not (and (vector? documents) (seq documents)

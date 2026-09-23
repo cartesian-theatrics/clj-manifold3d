@@ -39,7 +39,7 @@
 
 (defn- browser-api [method path data]
   (case [method path]
-    ["GET" "/api/state"] (transact-browser! #(vector % %))
+    ["GET" "/api/state"] (transact-browser! #(let [next (store/add-missing-examples %)] [next next]))
     ["PUT" "/api/documents-batch"] (transact-browser! #(store/save-documents % data))
     ["PUT" "/api/workspace"] (transact-browser! #(store/save-workspace % data))
     (js/Promise.reject (js/Error. "AI prompting requires the local server-backed journal; it is unavailable on this static site."))))

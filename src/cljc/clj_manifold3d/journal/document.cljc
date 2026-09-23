@@ -1,6 +1,6 @@
 (ns clj-manifold3d.journal.document
   (:require [clojure.string :as str]
-            [clj-manifold3d.flag-example :as flag]
+            [clj-manifold3d.journal.readme-example :as readme]
             [clj-manifold3d.journal.namespace :as ns-form]
             #?(:clj [clj-manifold3d.journal.example-source :as example-source])
             #?(:clj [clojure.edn :as edn] :cljs [cljs.reader :as edn]))
@@ -13,6 +13,12 @@
 (defn namespace-path [s]
   (when-not (valid-namespace? s) (throw (ex-info "Invalid namespace" {:namespace s})))
   (str (-> s (str/replace "-" "_") (str/replace "." "/")) ".clj"))
+
+(def curated-namespaces
+  #{"journal.castle-architecture" "journal.castle-night" "journal.flag-uv" "journal.readme"})
+(def castle-panes
+  [{:id "pane-architecture" :document "journal.castle-architecture" :width 1}
+   {:id "pane-night" :document "journal.castle-night" :width 1}])
 
 (defn source [{:keys [namespace ns-source blocks]}]
   (ns-form/assert-declaration! namespace ns-source)
@@ -103,9 +109,7 @@
             (block "code" "(m/cube 2 2 2 true)")]})
 
 (defn- raw-examples []
-  [{:namespace "journal.flag-uv" :title "American flag · surface UV" :revision 0
-    :blocks [(block "prose" "# American flag on a sphere\n\nThirteen stripes and fifty stars are drawn with colored Manifold geometry, baked into an image, and walked onto the sphere with native surface UV mapping. A depth grid adds a cloth wave, stepped out from the surface.\n\nRun the code below. The result is one Model carrying geometry, colors, UVs, and the embedded flag texture. Use Download to keep the GLB. Change `flag-depth` or `:depth-scale` to experiment with the wave.")
-             (block "code" flag/source)]}
+  [#?(:clj (example-source/flag-document) :cljs (example-source/embedded-flag-document))
    {:namespace "journal.first-shapes" :title "A study in solids" :revision 0
     :blocks [(block "prose" "# A study in solids\n\nA modeling journal is a place to **think with shapes**. These paragraphs are editable: click here and start writing. Code and its results live in the same page.")
              (block "code" "(def plate\n  (-> (m/cube 12 8 1 true)\n      (m/color [0.20 0.55 0.72 1])))\n\nplate")
@@ -123,6 +127,6 @@
 
 (defn examples []
   (mapv ns-form/migrate
-        (concat (raw-examples)
+        (concat (raw-examples) [(readme/document)]
                 #?(:clj (example-source/castle-documents)
                    :cljs (example-source/embedded-castle-documents)))))

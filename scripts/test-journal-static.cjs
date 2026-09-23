@@ -40,26 +40,39 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     }}));
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
-    const ready = p => p.waitForFunction(() => document.getElementById('engine')?.textContent === 'Ready', null, {timeout:90000});
+    const ready = p => p.waitForFunction(() => document.getElementById('engine')?.textContent === 'Ready', null, {timeout:300000});
     const saved = p => p.waitForFunction(() => document.getElementById('save-status').textContent === 'Saved', null, {timeout:15000});
     const codeSource = p => p.locator('[data-kind="code"] .block-editor').first().evaluate(el => el.testEditor.getValue());
-    const evaluate = async () => {
-      await page.getByRole('button', {name:'Evaluate document · Ctrl/Cmd+Alt+Enter', exact:true}).click();
+    const evaluate = async (pane = page) => {
+      await pane.getByRole('button', {name:'Evaluate document · Ctrl/Cmd+Alt+Enter', exact:true}).click();
       await ready(page);
       assert.equal(await page.locator('.block-result[data-status="error"]').count(), 0,
         (await page.locator('.block-result[data-status="error"]').allTextContents()).join('\n'));
-      const model = page.locator('.solid-preview').last();
+      const labels = await pane.locator('[data-kind="code"] .result-label').allTextContents();
+      assert.equal(labels.length, await pane.locator('[data-kind="code"]').count());
+      assert.ok(labels.every(label => /^(Scene|Model|Manifold|Cross-section) ·/.test(label)), JSON.stringify(labels));
+      const model = pane.locator('.solid-preview').last();
       await model.scrollIntoViewIfNeeded();
-      await page.waitForFunction(() => [...document.querySelectorAll('.solid-preview')].some(el => el.dataset.loaded === 'true'), null, {timeout:120000});
+      await page.waitForFunction(el => el.dataset.loaded === 'true', await model.elementHandle(), {timeout:120000});
       return model;
     };
     await page.goto(url); await ready(page);
     assert.deepEqual((await page.locator('#document-list [data-document]').evaluateAll(els => els.map(el => el.dataset.document))).sort(),
-      ['journal.castle-architecture', 'journal.castle-night', 'journal.flag-uv']);
+      ['journal.castle-architecture', 'journal.castle-night', 'journal.flag-uv', 'journal.readme']);
     assert.equal(await page.locator('.codex-model-controls').isVisible(), false);
     assert.equal(await page.locator('#browser-storage').isVisible(), true);
     assert.equal(await page.getByRole('button', {name:/Send prose to Codex/}).count(), 0);
 
+    assert.deepEqual(await page.locator('[data-pane-id]').evaluateAll(els => els.map(el => el.dataset.paneId)),
+      ['pane-architecture', 'pane-night']);
+    await evaluate(page.locator('[data-pane-id="pane-architecture"]'));
+    assert.equal(await page.locator('[data-pane-id="pane-architecture"] [data-kind="code"]').count(), 8);
+    console.log('PASS: default castle split; every architecture panel produces a model or cross-section');
+    await page.locator('[data-pane-id="pane-architecture"]').getByRole('button', {name:'Close pane · Ctrl+Alt+W', exact:true}).click();
+    await page.locator('[data-document="journal.readme"]').click();
+    await evaluate();
+    assert.equal(await page.locator('[data-kind="code"]').count(), 23);
+    console.log('PASS: all 23 README panels evaluate and produce geometry, including lofts, halfedges and animation');
     await page.locator('[data-document="journal.flag-uv"]').click();
     const flag = await evaluate();
     assert.ok((await flag.evaluate(el => el.testViewer.inspect())).meshCount > 0);
@@ -72,13 +85,24 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(a.authoredLights, 6); assert.equal(a.authoredCamera, true); assert.equal(a.clips, 1);
     assert.ok(a.meshCount > 600); assert.notDeepEqual(a.positions, b.positions);
     const download = page.waitForEvent('download');
-    await page.getByRole('button', {name:'Download this result as GLB · Ctrl+Alt+D', exact:true}).click();
+    await castle.locator('..').getByRole('button', {name:'Download this result as GLB · Ctrl+Alt+D', exact:true}).click();
     const bytes = await fs.readFile(await (await download).path());
     const glb = JSON.parse(bytes.subarray(20, 20 + bytes.readUInt32LE(12)));
     assert.ok(glb.images.length >= 2); assert.equal(glb.extensions.KHR_lights_punctual.lights.length, 6);
     assert.ok(glb.animations[0].channels.length > 800);
     await page.screenshot({path:'target/journal-static.png'});
     console.log(`PASS: complete castle imports architecture, renders textures/lights/animation, exports GLB (${((Date.now()-start)/1000).toFixed(1)}s)`);
+
+    // Reopen the already evaluated architecture beside the finished night scene.
+    await page.getByRole('button', {name:'Split document vertically · Ctrl+Alt+S', exact:true}).click();
+    const left = page.locator('[data-pane-id]').first(), right = page.locator('[data-pane-id]').last();
+    await left.locator('.document-select').selectOption('journal.castle-architecture');
+    const tower = left.locator('[data-block-id="journal-castle-architecture-tower"] .solid-preview');
+    await tower.scrollIntoViewIfNeeded();
+    await right.locator('.solid-preview').last().scrollIntoViewIfNeeded();
+    await page.waitForFunction(el => el.dataset.loaded === 'true', await tower.elementHandle(), {timeout:120000});
+    await page.screenshot({path:'target/journal-stages.png'});
+    await left.getByRole('button', {name:'Close pane · Ctrl+Alt+W', exact:true}).click();
 
     // Edit through CodeMirror (not storage internals), then exercise durable state.
     await page.locator('[data-document="journal.flag-uv"]').click();
@@ -124,9 +148,18 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     await page.locator('#document-form button[type="submit"]').click();
     await saved(page); await evaluate(); await page.reload(); await ready(page);
     assert.equal(await page.locator('[data-document="workshop.static"]').count(), 1);
+    const refreshBackup = page.waitForEvent('download');
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#update-examples').click();
+    const beforeRefresh = await fs.readFile(await (await refreshBackup).path(), 'utf8');
+    assert.ok(beforeRefresh.includes('newer-tab-edit'), 'Updating examples downloads prior edits first');
+    await saved(page); await page.reload(); await ready(page);
+    assert.deepEqual(await page.locator('[data-pane-id]').evaluateAll(els => els.map(el => el.dataset.paneId)),
+      ['pane-architecture', 'pane-night']);
+    assert.equal(await page.locator('[data-document="workshop.static"]').count(), 1);
     assert.deepEqual(requests, [], 'No API, external CDN, or root-relative asset requests');
     assert.deepEqual(errors, []);
-    console.log('PASS: concurrent-tab conflicts protect edits; new namespace persists and evaluates; zero API requests');
+    console.log('PASS: conflicts protect edits; new namespace persists; refreshing examples backs up edits and restores castle split; zero API requests');
   } finally {
     await browser?.close(); await new Promise(resolve => server.close(resolve));
   }

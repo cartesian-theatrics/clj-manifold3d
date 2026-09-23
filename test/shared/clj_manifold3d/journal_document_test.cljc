@@ -14,11 +14,22 @@
     (is (re-find #"defn terrain-height" (doc/source night)))
     (is (re-find #"texture/image" (doc/source night)))
     (is (re-find #"m/with-spatial-index" (doc/source night)))
-    (is (= "(assembly)" (:source (last (:blocks night)))))
+    (is (= '(assembly) (:form (last (:forms (ns-form/parse-code (:source (last (:blocks night)))))))))
+    (is (= [8 9] (mapv #(count (filter (fn [b] (= "code" (:kind b))) (:blocks %))) [castle night])))
     (doseq [document [castle night] block (:blocks document) :when (= "code" (:kind block))]
       (is (nil? (:warning (ns-form/parse-code (:source block)))))
       (is (not (ns-form/imports-in-body? (:source block))))
       (is (not (re-find #"Math/|BufferedImage|System/|with-open|\.asOriginal|manifold3d\." (:source block)))))))
+
+(deftest every-walkthrough-block-ends-in-a-preview
+  (doseq [document (filter #(doc/curated-namespaces (:namespace %)) (doc/examples))
+          block (:blocks document) :when (= "code" (:kind block))]
+    (let [{:keys [forms warning]} (ns-form/parse-code (:source block))
+          result (:form (last forms))]
+      (is (nil? warning) (str (:id block) ": " warning))
+      (is (re-matches #"[a-zA-Z0-9_-]+" (:id block)) "IDs also satisfy the server's document contract")
+      (is (some? result) (:id block))
+      (is (not (and (seq? result) (#{'def 'defn} (first result)))) (:id block)))))
 
 (deftest namespace-files
   (is (= "workshop/my_part.clj" (doc/namespace-path "workshop.my-part")))

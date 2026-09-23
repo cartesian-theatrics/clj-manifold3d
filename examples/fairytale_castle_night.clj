@@ -83,9 +83,10 @@
   (-> (m/surface (mapv (fn [y] (mapv #(+ 24 (height % y)) (range -480 481 4)))
                        (range -180 781 4)) 4.0)
       (m/translate [-480 -180 -24])))
-(defn terrain []
-  (let [land (land-surface terrain-height)
-        [low alpine] (m/split land (land-surface #(+ 35 (* 14 (land-noise (/ %1 43) (/ %2 43))))))
+(defn terrain
+  ([] (terrain (land-surface terrain-height)))
+  ([land]
+  (let [[low alpine] (m/split land (land-surface #(+ 35 (* 14 (land-noise (/ %1 43) (/ %2 43))))))
         [rock snow] (m/split alpine (land-surface #(+ 106 (* 24 (land-noise (/ %1 29) (/ %2 29))))))
         [grass beach] (m/split-by-plane low [0 0 1] -2)
         pine (compact (for [[z r h] [[0 2.2 6] [2.8 1.75 5.5] [5.5 1.2 4.8]]]
@@ -106,7 +107,7 @@
                  [:mountain-rock rock [0.24 0.29 0.36 1]] [:snowcaps snow [0.72 0.81 0.89 1]]
                  [:bridge-approach (castle/block 62 7 0.3 182 -24 3.25) [0.46 0.41 0.32 1]]])
           (cons (solid-node :lake (castle/block 1200 1200 0.3 0 0 -6.8)
-                            {:color [0.012 0.052 0.085 1] :metalness 0.65 :roughness 0.15}) trees))))
+                            {:color [0.012 0.052 0.085 1] :metalness 0.65 :roughness 0.15}) trees)))))
 
 (defn star-field []
   (let [star (m/sphere 0.15 6)]
