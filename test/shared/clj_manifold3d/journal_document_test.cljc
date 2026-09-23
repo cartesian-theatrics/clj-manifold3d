@@ -1,8 +1,10 @@
 (ns clj-manifold3d.journal-document-test
   (:require [clj-manifold3d.journal.document :as doc]
+            [clojure.string :as str]
             [clj-manifold3d.journal.schema :as schema]
             [clj-manifold3d.journal.viewer :as viewer]
             [clj-manifold3d.journal.namespace :as ns-form]
+            #?(:clj [clj-manifold3d.journal.example-source :as example-source])
             #?(:clj [clojure.test :refer [deftest is testing]]
                :cljs [cljs.test :refer-macros [deftest is testing]])))
 
@@ -30,6 +32,34 @@
       (is (re-matches #"[a-zA-Z0-9_-]+" (:id block)) "IDs also satisfy the server's document contract")
       (is (some? result) (:id block))
       (is (not (and (seq? result) (#{'def 'defn} (first result)))) (:id block)))))
+
+(deftest generated-examples-use-code-formatting
+  (let [flag (first (filter #(= "journal.flag-uv" (:namespace %)) (doc/examples)))
+        bake (:source (first (filter #(= "journal-flag-uv-bake" (:id %)) (:blocks flag))))
+        form (:form (first (:forms (ns-form/parse-code bake))))]
+    (is (re-find #"\(def image\n  \(texture/bake flag" bake))
+    (doseq [pair [":width 950" ":height 500" ":bounds [-2.375 -1.25 21.375 11.25]"
+                 ":background [0.65 0.7 0.68 1]"]]
+      (is (str/includes? bake pair) pair))
+    (is (= '(def image (texture/bake flag :width 950 :height 500
+                                   :bounds [-2.375 -1.25 21.375 11.25]
+                                   :background [0.65 0.7 0.68 1])) form)))
+  (doseq [document (filter #(doc/curated-namespaces (:namespace %)) (doc/examples))
+          block (:blocks document) :when (= "code" (:kind block))]
+    (is (not (re-find #"\(def\s*\n" (:source block))) (:id block))))
+
+#?(:clj
+   (deftest formatting-preserves-every-generated-form
+     (let [format-code @#'example-source/code]
+       (with-redefs-fn
+         {#'example-source/code
+          (fn [form]
+            (let [source (format-code form)
+                  {:keys [forms warning]} (ns-form/parse-code source)]
+              (is (nil? warning) source)
+              (is (= [form] (mapv :form forms)) source)
+              source))}
+         #(do (example-source/castle-documents) (example-source/flag-document))))))
 
 (deftest namespace-files
   (is (= "workshop/my_part.clj" (doc/namespace-path "workshop.my-part")))

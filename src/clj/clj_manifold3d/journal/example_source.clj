@@ -2,7 +2,7 @@
   "Build editable, staged journals from canonical examples without evaluating them."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.pprint :as pprint]
+            [zprint.core :as zprint]
             [clojure.walk :as walk]
             [clj-manifold3d.flag-example :as flag]
             [clj-manifold3d.journal.namespace :as ns-form]))
@@ -14,7 +14,9 @@
 
 (defn- example [file] (parsed (slurp (io/file "examples" file))))
 (defn- code [form]
-  (str/trim (with-out-str (binding [pprint/*print-right-margin* 88] (pprint/pprint form)))))
+  ;; These are executable forms, not data: keep def/let bodies and keyword
+  ;; arguments in normal Clojure layout. Original source sections stay intact.
+  (zprint/zprint-str form {:width 88 :map {:comma? false :sort? false}}))
 (defn- section [forms start end]
   (let [names (mapv #(second (:form %)) forms)
         a (.indexOf names start) b (.indexOf names end)]
