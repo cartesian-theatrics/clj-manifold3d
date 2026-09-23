@@ -98,9 +98,12 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     const left = page.locator('[data-pane-id]').first(), right = page.locator('[data-pane-id]').last();
     await left.locator('.document-select').selectOption('journal.castle-architecture');
     const tower = left.locator('[data-block-id="journal-castle-architecture-tower"] .solid-preview');
+    const nightPreview = right.locator('.solid-preview').last();
     await tower.scrollIntoViewIfNeeded();
-    await right.locator('.solid-preview').last().scrollIntoViewIfNeeded();
+    await nightPreview.scrollIntoViewIfNeeded();
     await page.waitForFunction(el => el.dataset.loaded === 'true', await tower.elementHandle(), {timeout:120000});
+    await page.waitForFunction(el => el.dataset.loaded === 'true', await nightPreview.elementHandle(), {timeout:120000});
+    assert.equal(await nightPreview.evaluate(el => el.testViewer.inspect().authoredLights), 6);
     await page.screenshot({path:'target/journal-stages.png'});
     await left.getByRole('button', {name:'Close pane · Ctrl+Alt+W', exact:true}).click();
 
