@@ -75,22 +75,6 @@ The stable release was selected to preserve the existing fill rules, tolerance,
 and smoothing APIs; post-release upstream development removes some of them.
 See the sibling fork's `UPSTREAM_UPDATE.md` for the native integration details.
 
-## Release packaging
-
-`version.txt` and `pom.xml` define the library release version. After building
-matching WASM with `npm run build:wasm`, run `python3 scripts/build-release.py`.
-The release JAR contains only the top-level CLJ/CLJC/CLJS library namespaces,
-WASM runtime, Maven metadata and `deps.cljs` (the `fast-png` npm dependency).
-Journal namespaces, editors, UI assets, examples and journal-only dependencies
-are excluded. Development aliases and journal applications remain available
-in the source checkout.
-
-`python3 scripts/prepare-release-test.py` creates an isolated consumer project
-under `target/release-test`; CI runs JVM regressions and CLJS Node/browser tests
-there against the packaged JAR and published JNI 2.2.0. Publishing uses the
-Manifold repository's manually dispatched `clj-library-release.yml` workflow,
-which builds an exact wrapper commit and uploads only its tested JAR and POM.
-
 # Install
 
 You need include the native [Manifold Bindings](https://github.com/SovereignShop/manifold) for your platform separately. For example:
