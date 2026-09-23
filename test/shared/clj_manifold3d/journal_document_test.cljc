@@ -41,6 +41,14 @@
         (is (empty? (example-format/updates
                      [(document (str/replace edited "(def sample" "(def\n sample"))])))))))
 
+(deftest refresh-scene-expressions-without-definitions-too
+  (let [document (fn [source] {:namespace "journal.castle-night"
+                               :blocks [{:id "scene" :kind "code" :source source}]})
+        fresh "(m/scene {:nodes []})"]
+    (with-redefs [doc/examples (fn [] [(document fresh)])]
+      (is (= [{:id "scene" :source fresh}]
+             (example-format/updates [(document "(m/scene\n {:nodes\n  []})")]))))))
+
 #?(:clj
    (deftest upgrades-the-original-data-printer-camera-panel
      (let [old (with-redefs-fn

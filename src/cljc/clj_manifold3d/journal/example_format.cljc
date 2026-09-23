@@ -22,6 +22,5 @@
            block (:blocks document)
            :let [source (:source block) fresh (:source (get blocks (:id block)))]
            :when (and (= "code" (:kind block)) fresh (not= source fresh)
-                      (re-find #"(?m)^\(defn?\s*\n" source)
                       (= (tokens source) (tokens fresh)))]
        {:id (:id block) :source fresh}))))
