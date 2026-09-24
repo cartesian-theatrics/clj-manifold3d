@@ -64,7 +64,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(runtimeRequests.length, 3);
     assert.ok(runtimeRequests.every(url => new URL(url).searchParams.get('v') === buildVersion));
     assert.deepEqual((await page.locator('#document-list [data-document]').evaluateAll(els => els.map(el => el.dataset.document))).sort(),
-      ['journal.castle-architecture', 'journal.castle-night', 'journal.flag-uv', 'journal.readme']);
+      ['journal.castle-architecture', 'journal.castle-night', 'journal.flag-uv', 'journal.raptor-3', 'journal.readme']);
     assert.equal(await page.locator('.codex-model-controls').isVisible(), false);
     assert.equal(await page.locator('#browser-storage').isVisible(), true);
     assert.equal(await page.getByRole('button', {name:/Send prose to Codex/}).count(), 0);
@@ -75,6 +75,29 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await page.locator('[data-pane-id="pane-architecture"] [data-kind="code"]').count(), 8);
     console.log('PASS: default castle split; every architecture panel produces a model or cross-section');
     await page.locator('[data-pane-id="pane-architecture"]').getByRole('button', {name:'Close pane · Ctrl+Alt+W', exact:true}).click();
+    await page.locator('[data-document="journal.raptor-3"]').click();
+    const raptorStart = Date.now(), raptor = await evaluate();
+    assert.equal(await page.locator('[data-kind="code"]').count(), 6);
+    // Native Model export can split one authored part into material primitives.
+    assert.ok((await raptor.evaluate(el => el.testViewer.inspect().meshCount)) >= 376);
+    const raptorDownload = page.waitForEvent('download');
+    await raptor.locator('..').getByRole('button', {name:'Download this result as GLB · Ctrl+Alt+D', exact:true}).click();
+    const raptorBytes = await fs.readFile(await (await raptorDownload).path());
+    const raptorGLB = JSON.parse(raptorBytes.subarray(20, 20 + raptorBytes.readUInt32LE(12)));
+    assert.ok(raptorGLB.meshes.length >= 376);
+    assert.ok(raptorGLB.images.length >= 2, 'Manufacturing grain is embedded');
+    assert.deepEqual(raptorGLB.nodes[0].scale, [0.001, 0.001, 0.001]);
+    assert.equal(raptorGLB.nodes[0].rotation, undefined, 'Journal assembly stays Z-up');
+    assert.equal(raptorGLB.nodes.find(n => n.name === 'Engine').children.length, 355);
+    assert.equal(raptorGLB.nodes.find(n => n.name === 'Removable transport fixture').children.length, 21);
+    await fs.writeFile('target/journal-raptor-3.glb', raptorBytes);
+    await page.screenshot({path:'target/journal-raptor-3.png'});
+    console.log(`PASS: six editable Raptor stages render and export 376 textured parts (${((Date.now()-raptorStart)/1000).toFixed(1)}s)`);
+    if (process.env.JOURNAL_STATIC_RAPTOR_ONLY) {
+      assert.deepEqual(requests, [], 'No API or external asset requests');
+      assert.deepEqual(errors, []);
+      return;
+    }
     await page.locator('[data-document="journal.readme"]').click();
     await evaluate();
     assert.equal(await page.locator('[data-kind="code"]').count(), 24);

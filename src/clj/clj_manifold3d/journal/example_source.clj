@@ -136,5 +136,31 @@
        ["wave" "## Lift the flag into a cloth wave\n\nA numeric depth grid holds the pole edge steady and increases the ripple toward the free edge. Depth is relative to the surface normal; :step supplies boundary walls. Compare this to the smooth sphere above."
         (joined (definitions bindings '[wave-columns wave-rows wave-depth flag-depth surface]) "surface")]])))
 
+(defn raptor-document []
+  (let [r (example "raptor_3.clj")]
+    (document "journal.raptor-3" "Raptor 3 · engine"
+      (into imports ['[clj-manifold3d.texture :as texture]])
+      "# Raptor 3 · SN1\n\nBuild the engine from its bell profile to a detailed assembly with curved plumbing, metal finishes, and a removable transport pallet. Choose **Run page** to evaluate all six stages, then orbit or download the final model. All geometry comes from the editable source in [examples/raptor_3.clj](https://github.com/cartesian-theatrics/clj-manifold3d/blob/main/examples/raptor_3.clj).\n\nThis is a photo-based reconstruction of the August 2024 sea-level SN1: dimensions, hidden routing, and small fittings are approximate. It is a display model, not engineering CAD. The [example notes](https://github.com/cartesian-theatrics/clj-manifold3d/blob/main/examples/raptor_3.md) include reference photographs."
+      [["profile" "## Trace the bell\n\nBézier curves describe the outer silhouette. Revolving a thin closed profile will leave a real open bore. The helper definitions also include parallel-transport pipe sweeps and fasteners. Change `*segments*` from 128 to 64 for faster previews, or 160 for the standalone model's full resolution. Geometry is authored in millimetres."
+        (joined (section r '*segments* 'nozzle)
+                "(m/cross-section\n  (concat bell-profile\n    (reverse (map (fn [[r z]] [(- r 10) z]) bell-profile))))")]
+       ["nozzle" "## Revolve the nozzle and chamber\n\nAdd the inner liner, cooling collectors, injector flange, welds, and a white SN1 marking fitted to the bell's curved surface. Procedural finish textures are embedded in the model. The journal uses metre-scale Z-up scenes to match its viewer; the standalone exporter uses standard glTF Y-up."
+        (joined (:source (named r 'nozzle)) (:source (named r 'finish-image))
+                (:source (named r 'parts-scene))
+                "(defn preview-parts [engine fixture]\n  (-> (parts-scene engine fixture)\n      (assoc-in [:nodes 0 :name] \"Raptor 3 / metres / Z-up\")\n      (update-in [:nodes 0 :transform] dissoc :rotation)\n      m/scene))"
+                "(def nozzle-parts (vec (nozzle)))\n\n(preview-parts nozzle-parts [])")]
+       ["powerhead" "## Assemble the compact powerhead\n\nTwo asymmetric pump housings sit above the chamber. Add machined flanges, individual bolt heads and washers, service covers, cast webs, and attachment lugs."
+        (joined (:source (named r 'powerhead))
+                "(def head-parts (vec (powerhead)))\n\n(preview-parts (concat nozzle-parts head-parts) [])")]
+       ["plumbing" "## Route the feed pipes and instrumentation\n\nSweep circular sections along smooth centreline curves. Fit the main coolant feed, turbine return, rear riser, pressure tubes, valve block, and restrained external harness. These are individually closed display solids."
+        (joined (:source (named r 'plumbing))
+                "(def pipe-parts (vec (plumbing)))\n\n(def engine (vec (concat nozzle-parts head-parts pipe-parts)))\n\n(preview-parts engine [])")]
+       ["transport" "## Build the removable transport fixture\n\nThe pallet has open forklift runners, padded nozzle supports, a collar, and adjustable braces. Inspect it separately before placing the engine on it."
+        (joined (:source (named r 'stand))
+                "(def fixture (vec (stand)))\n\n(preview-parts [] fixture)")]
+       ["assembly" "## Finish the complete engine\n\nReuse the preceding solids to assemble all 376 parts with named components, smooth normals, and distinct metal finishes. Orbit to inspect the rear plumbing or the open bell. Use **Download GLB** on this result to save the complete model. Replace `fixture` with `[]` below to export only the engine."
+        "(def raptor (preview-parts engine fixture))\n\nraptor"]])))
+
+(defmacro embedded-raptor-document [] (raptor-document))
 (defmacro embedded-castle-documents [] (castle-documents))
 (defmacro embedded-flag-document [] (flag-document))

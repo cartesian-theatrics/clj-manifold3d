@@ -15,7 +15,8 @@
   (str (-> s (str/replace "-" "_") (str/replace "." "/")) ".clj"))
 
 (def curated-namespaces
-  #{"journal.castle-architecture" "journal.castle-night" "journal.flag-uv" "journal.readme"})
+  #{"journal.castle-architecture" "journal.castle-night" "journal.flag-uv" "journal.readme"
+    "journal.raptor-3"})
 (def castle-panes
   [{:id "pane-architecture" :document "journal.castle-architecture" :width 1}
    {:id "pane-night" :document "journal.castle-night" :width 1}])
@@ -127,6 +128,8 @@
 
 (defn examples []
   (mapv ns-form/migrate
-        (concat (raw-examples) [(readme/document)]
+        (concat (raw-examples) [(readme/document)
+                               #?(:clj (example-source/raptor-document)
+                                  :cljs (example-source/embedded-raptor-document))]
                 #?(:clj (example-source/castle-documents)
                    :cljs (example-source/embedded-castle-documents)))))

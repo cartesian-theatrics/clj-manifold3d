@@ -104,6 +104,10 @@ clojure -M:clj-test
 
 # Examples
 
+The [Raptor 3 SN1 example](examples/raptor_3.md) builds a detailed rocket-engine
+display assembly with a hollow nozzle, curved plumbing, metal finishes, and an
+optional transport fixture. Run `clojure -M:clj-dev -m raptor-3 target/raptor-3.glb`.
+
 Examples should look familiar if you've ever used OpenSCAD.
 
 ## Manifolds
@@ -1186,7 +1190,7 @@ build in Chromium with an isolated temporary Datahike database.
 The [hosted journal](https://cartesian-theatrics.github.io/clj-manifold3d/journal/)
 uses the same editor, DataScript schema/subscriptions, SCI worker and native
 WASM geometry engine, without a Clojure server. Its initial library contains
-**Castle · night scene**, **Castle · architecture**, **American flag · surface UV**,
+**Castle · night scene**, **Castle · architecture**, **Raptor 3 · engine**, **American flag · surface UV**,
 and **Library · README walkthrough**. The two castle documents open side by side
 by default. Choose **Run page** to evaluate a document; every modeling block
 returns a shape or scene, showing the construction stages rather than only the
@@ -1199,7 +1203,7 @@ texturing and a lit animated scene. File/font-dependent examples are explained
 but not executed in the browser-only runtime.
 
 Existing journals and pane layouts are kept on reload. **Update examples**
-downloads a backup before replacing the four bundled examples and restoring
+downloads a backup before replacing the five bundled examples and restoring
 the castle split view (after confirmation). Other documents are untouched.
 Newly introduced examples are added automatically without replacing saved ones.
 

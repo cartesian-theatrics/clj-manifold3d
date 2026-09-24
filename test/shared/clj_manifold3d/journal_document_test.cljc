@@ -78,6 +78,17 @@
       (is (not (ns-form/imports-in-body? (:source block))))
       (is (not (re-find #"Math/|BufferedImage|System/|with-open|\.asOriginal|manifold3d\." (:source block)))))))
 
+(deftest raptor-is-a-portable-staged-document
+  (let [raptor (first (filter #(= "journal.raptor-3" (:namespace %)) (doc/examples)))
+        blocks (filter #(= "code" (:kind %)) (:blocks raptor))]
+    (is (doc/curated-namespaces (:namespace raptor)))
+    (is (= 6 (count blocks)))
+    (is (re-find #"defn tube" (doc/source raptor)))
+    (is (re-find #"defn parts-scene" (doc/source raptor)))
+    (is (re-find #"preview-parts engine fixture" (:source (last blocks))))
+    (doseq [block blocks]
+      (is (not (re-find #"Math/|System/|PointerScope|with-open|m/export-scene" (:source block)))))))
+
 (deftest every-walkthrough-block-ends-in-a-preview
   (doseq [document (filter #(doc/curated-namespaces (:namespace %)) (doc/examples))
           block (:blocks document) :when (= "code" (:kind block))]

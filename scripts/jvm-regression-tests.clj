@@ -5,7 +5,7 @@
     clj-manifold3d.boolean-uv-test clj-manifold3d.texture-test
     clj-manifold3d.split-lifetime-test clj-manifold3d.surface-depth-test
     clj-manifold3d.scene-spatial-test clj-manifold3d.fairytale-castle-test
-    clj-manifold3d.fairytale-castle-night-test])
+    clj-manifold3d.fairytale-castle-night-test clj-manifold3d.raptor-3-test])
 
 (doseq [suite suites] (require suite))
 ;; Both legacy animation test files share a namespace. Load both explicitly

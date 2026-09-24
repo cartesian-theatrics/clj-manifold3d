@@ -811,7 +811,7 @@
 (defn update-examples! []
   (if (or (= "running" (:ui/engine (state/workspace))) (some gen/active? (state/requests)))
     (status! "Stop evaluation and AI requests before updating examples.")
-    (when (js/confirm "Replace the castle, flag and README examples with their latest walkthroughs, and open the castle split view? A backup of all current documents will download first. Other documents are kept.")
+    (when (js/confirm "Replace the castle, Raptor 3, flag and README examples with their latest walkthroughs, and open the castle split view? A backup of all current documents will download first. Other documents are kept.")
       (export-backup!)
       (state/import-documents!
        (mapv #(assoc % :revision (:revision (state/document (:namespace %)) 0))
